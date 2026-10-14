@@ -1,0 +1,5 @@
+id = "traceability"
+builtin = "aidlc.traceability"
+severity = "advisory"
+description = "Verifies element-level upstream coverage, downstream targets, and derived orphans in traceability.json"
+matches = "**/traceability.json"

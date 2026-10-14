@@ -1,0 +1,5 @@
+role = "aidlc-design-agent"
+description = "UX/UI designer responsible for wireframing, interaction design, accessibility, and design system compliance. Leads Rough Mockups and Refined Mockups stages. Supports Domain Design, and serves as a dispatched collaborator in the User Stories mob ensemble."
+prompt = "roles/aidlc-design-agent.md"
+knowledge = [ "knowledge/aidlc-design-agent/accessibility-wcag.md", "knowledge/aidlc-design-agent/component-spec-template.md", "knowledge/aidlc-design-agent/interaction-design-patterns.md", "knowledge/aidlc-design-agent/ux-guide.md", "knowledge/aidlc-design-agent/wireframing-guide.md", "knowledge/aidlc-shared/ai-dlc-principles.md", "knowledge/aidlc-shared/audit-format.md", "knowledge/aidlc-shared/brownfield.md", "knowledge/aidlc-shared/knowledge-readme-template.md", "knowledge/aidlc-shared/memory-template.md", "knowledge/aidlc-shared/rules-reading.md", "knowledge/aidlc-shared/state-template.md", "knowledge/aidlc-shared/verification.md", "knowledge/aidlc-shared/worktree-info-schema.md" ]
+tools_allowed = [ "read", "write", "shell" ]

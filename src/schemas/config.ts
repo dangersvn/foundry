@@ -19,6 +19,9 @@ export const Config = z
       .object({ count: z.number().int().positive().default(3), stall_seconds: z.number().positive().default(600) })
       .default({ count: 3, stall_seconds: 600 }),
     aidlc: z.object({ source: z.string().default("vendor/aidlc-workflows") }).default({ source: "vendor/aidlc-workflows" }),
+    // The project's own test command: the refinery runs it on every merge
+    // when the formula has no verify of its own.
+    project: z.object({ test_command: z.string().optional() }).default({}),
     // Layered rules loaded into every envelope, general to specific.
     rules: z.object({ org: z.string().optional(), team: z.string().optional(), project: z.string().optional() }).default({}),
   })

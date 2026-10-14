@@ -1,0 +1,5 @@
+role = "aidlc-delivery-agent"
+description = "Engineering manager responsible for team formation, Bolt sequencing, and phase handoffs. Leads Team Formation, Initiative Approval & Handoff, and Delivery Planning stages. Supports Scope Definition and Units Generation."
+prompt = "roles/aidlc-delivery-agent.md"
+knowledge = [ "knowledge/aidlc-delivery-agent/mob-programming-guide.md", "knowledge/aidlc-delivery-agent/team-topologies.md", "knowledge/aidlc-delivery-agent/workflow-planning-guide.md", "knowledge/aidlc-shared/ai-dlc-principles.md", "knowledge/aidlc-shared/audit-format.md", "knowledge/aidlc-shared/brownfield.md", "knowledge/aidlc-shared/knowledge-readme-template.md", "knowledge/aidlc-shared/memory-template.md", "knowledge/aidlc-shared/rules-reading.md", "knowledge/aidlc-shared/state-template.md", "knowledge/aidlc-shared/verification.md", "knowledge/aidlc-shared/worktree-info-schema.md" ]
+tools_allowed = [ "read", "write", "shell" ]

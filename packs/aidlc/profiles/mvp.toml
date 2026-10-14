@@ -1,0 +1,26 @@
+profile = "mvp"
+description = "Skip operations, ship the core"
+steps = [ "intent-capture", "feasibility", "scope-definition", "rough-mockups", "reverse-engineering", "practices-discovery", "requirements-analysis", "user-stories", "refined-mockups", "domain-design", "units-generation", "contract-design", "delivery-planning", "functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation", "build-and-test", "ci-pipeline" ]
+
+[params]
+depth = "Standard"
+test_strategy = "Standard"
+project_type = "auto"
+
+[settings]
+collaborators = false
+review = "advisory"
+learnings = false
+summary_confirmation = false
+skeleton = false
+plan_approval = true
+
+[source_settings]
+depth = "Standard"
+skeleton = "on"
+guard_policy = "off"
+sensors = "on"
+learnings = "on"
+summary_confirmation = "on"
+plan_approval = "on"
+collaborators = "off"

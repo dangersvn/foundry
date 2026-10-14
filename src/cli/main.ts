@@ -8,7 +8,9 @@ import { workerId, workers, type Workspace } from "../kernel/dispatcher.js";
 import { FoundryError } from "../kernel/errors.js";
 import * as git from "../kernel/git.js";
 import { Ledger, type InputRef, type Item } from "../kernel/ledger.js";
-import { parseConfig } from "../schemas/config.js";
+import { compile, describePlan } from "../kernel/compile.js";
+import { importAidlc } from "../import/aidlc.js";
+import { parseConfig, type Config } from "../schemas/config.js";
 import { loadPack, validatePack, type Pack } from "../schemas/pack.js";
 import { cmdAsk, cmdNote, cmdSubmit } from "./agent.js";
 import { runFactory } from "./factory.js";
@@ -29,6 +31,10 @@ const USAGE = `usage:
   foundry decisions [RUN-n]                     the decision log
   foundry why <file>:<line>                     commit, item, decisions, inputs and run behind a line
   foundry validate <pack>                       check a pack
+  foundry import aidlc [--source <dir>] [--out <dir>]   import AI-DLC into packs/aidlc
+  foundry plan <pack> [--profile <p>] [--param k=v] --dry-run [--json]   show the compiled plan
+
+run and add also take --profile <p> and --param k=v (repeatable) for packs with profiles.
 
 Inside an item's worktree, agents use ./.foundry/bin/foundry submit | note | ask | handoff.
 
@@ -68,21 +74,35 @@ function resolvePack(arg: string): Pack {
   return pack.dir ? { ...pack, dir: path.resolve(pack.dir) } : pack;
 }
 
-// Formulas without a title take the request as the run's title.
-async function startRun(ws: Workspace, pack: Pack, input: string) {
-  const f = pack.formula;
-  const title = f.title ?? (input ? (input.length > 60 ? input.slice(0, 57) + "..." : input) : f.formula);
-  const ids = await ws.ledger.startRun({ formula: f, title, input, packDir: pack.dir });
+function parseParams(list: string[] | undefined): Record<string, string> {
+  const params: Record<string, string> = {};
+  for (const kv of list ?? []) {
+    const i = kv.indexOf("=");
+    if (i < 1) throw new FoundryError("config", `--param takes key=value, got "${kv}"`, "foundry run packs/aidlc --profile bugfix --param depth=Minimal");
+    params[kv.slice(0, i)] = kv.slice(i + 1);
+  }
+  return params;
+}
+
+// Compiles the pack (and profile) into the formula the run pins. Formulas
+// without a title take the request as the run's title.
+async function startRun(ws: Workspace, pack: Pack, input: string, profile?: string, paramList?: string[]) {
+  const c = compile(pack, { profile, params: parseParams(paramList), repo: ws.repo, testCommand: ws.config.project.test_command });
+  const f = c.formula;
+  const title = (input ? (input.length > 60 ? input.slice(0, 57) + "..." : input) : undefined) ?? f.title ?? f.formula;
+  const named = f.title && !input ? f.title : title;
+  const ids = await ws.ledger.startRun({ formula: f, title: pack.formula.oneStep ? (f.title ?? title) : named, input, packDir: pack.dir, params: c.params });
+  if (c.profile || Object.keys(c.params).length) await ws.ledger.runNote(ids.runId, "run_setup", { profile: c.profile, params: c.params, settings: c.settings, setup: c.setup });
   return { ...ids, title };
 }
 
-function workersArg(args: string[], extra: Record<string, { type: "string" }> = {}) {
+function workersArg(args: string[], extra: Record<string, { type: "string"; multiple?: boolean }> = {}) {
   const { positionals, values } = parseArgs({ args, allowPositionals: true, options: { workers: { type: "string" }, ...extra } });
   const n = values.workers === undefined ? undefined : Number(values.workers);
   if (n !== undefined && (!Number.isInteger(n) || n < 1)) {
     throw new FoundryError("config", `--workers must be a whole number, got "${values.workers}"`, "foundry work --workers 2");
   }
-  return { positionals, values: values as Record<string, string | undefined>, workers: n };
+  return { positionals, values: values as Record<string, string | undefined> & { param?: string[] }, workers: n };
 }
 
 const failureOf = async (ws: Workspace, itemId: string) => {
@@ -108,12 +128,12 @@ async function reportRun(ws: Workspace, runId: string): Promise<number> {
 }
 
 async function cmdRun(args: string[]): Promise<number> {
-  const { positionals, values, workers: n } = workersArg(args, { input: { type: "string" } });
+  const { positionals, values, workers: n } = workersArg(args, { input: { type: "string" }, profile: { type: "string" }, param: { type: "string", multiple: true } as never });
   if (positionals.length !== 1) throw new FoundryError("config", "foundry run takes one pack or formula", "foundry run health-endpoint --input \"...\"");
   const pack = resolvePack(positionals[0]!);
   const ws = await openWorkspace();
   try {
-    const { runId, itemIds, title } = await startRun(ws, pack, values.input ?? "");
+    const { runId, itemIds, title } = await startRun(ws, pack, values.input ?? "", values.profile, values.param as unknown as string[]);
     for (const id of itemIds) ws.out(`${runId} created ${id}: ${title}`);
     const { fatal } = await workers(ws, n ?? ws.config.workers.count, { runId });
     if (fatal) {
@@ -127,12 +147,16 @@ async function cmdRun(args: string[]): Promise<number> {
 }
 
 async function cmdAdd(args: string[]): Promise<number> {
-  const { positionals, values } = parseArgs({ args, allowPositionals: true, options: { input: { type: "string" } } });
+  const { positionals, values } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { input: { type: "string" }, profile: { type: "string" }, param: { type: "string", multiple: true } },
+  });
   if (positionals.length !== 1) throw new FoundryError("config", "foundry add takes one pack or formula", "foundry add ./formulas/feature.toml --input \"...\"");
   const pack = resolvePack(positionals[0]!);
   const ws = await openWorkspace();
   try {
-    const { itemIds, title } = await startRun(ws, pack, values.input ?? "");
+    const { itemIds, title } = await startRun(ws, pack, values.input ?? "", values.profile, values.param);
     ws.out(`${itemIds.join(", ")} queued: ${title}  (start workers with \`foundry work\` or \`foundry factory\`)`);
     return 0;
   } finally {
@@ -239,7 +263,9 @@ async function statusRun(ws: Workspace, runId: string): Promise<number> {
   if (!run) throw new FoundryError("ledger", `no run ${runId}`, "foundry status");
   ws.out(`${run.id}: ${run.title ?? run.goal}  [${run.status}]  formula ${run.formula} v${run.formula_version}`);
   const items = await ws.ledger.listItems(runId);
-  for (const s of await ws.ledger.runSteps(runId)) {
+  const order = (JSON.parse(run.formula_json ?? '{"steps":[]}') as { steps: { id: string }[] }).steps.map((s) => s.id);
+  const steps = (await ws.ledger.runSteps(runId)).sort((a, b) => order.indexOf(a.step_id) - order.indexOf(b.step_id));
+  for (const s of steps) {
     ws.out(`  step ${s.step_id.padEnd(24)} ${s.status}`);
     for (const i of items.filter((i) => i.step_id === s.step_id)) ws.out(`    ${i.id.padEnd(6)} ${i.status.replace("_", " ").padEnd(14)} attempt ${i.attempt}  ${i.title}`);
   }
@@ -364,6 +390,71 @@ async function cmdValidate(args: string[]): Promise<number> {
   return 0;
 }
 
+// The AI-DLC source and the rewrite table, wherever foundry is run from.
+function aidlcSource(arg?: string): string {
+  if (arg) return path.resolve(arg);
+  const cfgPath = path.join(process.cwd(), "foundry.toml");
+  let config: Config | undefined;
+  if (fs.existsSync(cfgPath)) config = parseConfig(fs.readFileSync(cfgPath, "utf8"), cfgPath);
+  return path.resolve(config?.aidlc.source ?? "vendor/aidlc-workflows");
+}
+
+async function cmdImport(args: string[]): Promise<number> {
+  const { positionals, values } = parseArgs({ args, allowPositionals: true, options: { source: { type: "string" }, out: { type: "string" } } });
+  if (positionals[0] !== "aidlc") throw new FoundryError("config", "foundry import supports one source: aidlc", "foundry import aidlc");
+  const report = importAidlc({
+    source: aidlcSource(values.source),
+    out: path.resolve(values.out ?? "packs/aidlc"),
+    rules: path.join(pkgRoot, "docs", "aidlc-rewrites.md"),
+  });
+  console.log(`imported AI-DLC ${report.tag} into ${values.out ?? "packs/aidlc"}:`);
+  console.log(`  ${report.stages} stages as ${report.steps} steps plus run setup; ${report.roles} roles, ${report.profiles} profiles, ${report.verifiers} verifiers; ${report.reviewSteps} steps with a review step`);
+  console.log(`  ${report.rewrites.length} engine calls rewritten (see ${values.out ?? "packs/aidlc"}/import-report.md)`);
+  return 0;
+}
+
+async function cmdPlan(args: string[]): Promise<number> {
+  const { positionals, values } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { profile: { type: "string" }, param: { type: "string", multiple: true }, "dry-run": { type: "boolean" }, json: { type: "boolean" } },
+  });
+  if (positionals.length !== 1) throw new FoundryError("config", "foundry plan takes one pack", "foundry plan packs/aidlc --profile bugfix --dry-run");
+  const pack = resolvePack(positionals[0]!);
+  let repo: string | undefined;
+  let testCommand: string | undefined;
+  try {
+    repo = await git.repoRoot(process.cwd());
+    const cfg = path.join(repo, "foundry.toml");
+    if (fs.existsSync(cfg)) testCommand = parseConfig(fs.readFileSync(cfg, "utf8"), cfg).project.test_command;
+  } catch {}
+  const c = compile(pack, { profile: values.profile, params: parseParams(values.param), repo, testCommand });
+  const plan = describePlan(c, pack);
+  if (values.json) {
+    console.log(JSON.stringify(plan, null, 2));
+    return 0;
+  }
+  console.log(`Plan: ${pack.name} ${pack.version}${c.profile ? `, profile ${c.profile}` : ""} (dry run, nothing started)`);
+  const pt = c.setup.project_type;
+  console.log(`run setup: ${pt ? `project_type=${pt.value}${pt.detected ? " (detected)" : ""}` : "nothing to detect"}${c.setup.dropped.length ? `; dropped: ${c.setup.dropped.join(", ")}` : ""}`);
+  console.log(`params: ${Object.entries(c.params).map(([k, v]) => `${k}=${v}`).join(", ") || "none"}`);
+  if (Object.keys(c.settings).length) console.log(`settings: ${Object.entries(c.settings).map(([k, v]) => `${k}=${v}`).join(", ")}`);
+  console.log(`merge verify: ${plan.merge_verify ?? "none (set [project] test_command in foundry.toml)"}`);
+  console.log(`${plan.steps.length} stage steps after run setup:`);
+  for (const s of plan.steps) {
+    const tags = [
+      s.per ? `per ${s.per}` : "",
+      s.gate ? `gate ${s.gate}${s.gate_note ? ` (${s.gate_note})` : ""}` : "",
+      s.review ? `review ${s.review.role}${s.review.advisory ? " (advisory)" : ""}` : "",
+      s.conditional ? "conditional" : "",
+      s.environment_change ? "changes an environment" : "",
+    ].filter(Boolean);
+    console.log(`  ${String(s.n).padStart(2)}. ${s.id.padEnd(26)} ${s.roles.join(" + ").padEnd(36)} needs ${s.needs.join(", ") || "-"}`);
+    if (tags.length) console.log(`      ${tags.join(" · ")}`);
+  }
+  return 0;
+}
+
 async function main(argv: string[]): Promise<number> {
   const [cmd, ...rest] = argv;
   switch (cmd) {
@@ -379,6 +470,8 @@ async function main(argv: string[]): Promise<number> {
     case "decisions": return cmdDecisions(rest);
     case "why": return cmdWhy(rest);
     case "validate": return cmdValidate(rest);
+    case "import": return cmdImport(rest);
+    case "plan": return cmdPlan(rest);
     case "submit": return cmdSubmit(rest);
     case "note": return cmdNote(rest, "note");
     case "handoff": return cmdNote(rest, "handoff");

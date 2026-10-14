@@ -1,0 +1,27 @@
+profile = "express"
+description = "Lightest run: requirements to deploy, no design pass, no reviewers"
+steps = [ "reverse-engineering", "requirements-analysis", "code-generation", "build-and-test", "deployment-pipeline", "deployment-execution", "observability-setup" ]
+
+[params]
+depth = "Minimal"
+test_strategy = "Minimal"
+project_type = "auto"
+
+[settings]
+collaborators = false
+review = "advisory"
+learnings = false
+summary_confirmation = false
+skeleton = false
+plan_approval = true
+
+[source_settings]
+depth = "Minimal"
+skeleton = "off"
+review_cap = "none"
+guard_policy = "off"
+sensors = "off"
+learnings = "off"
+summary_confirmation = "off"
+plan_approval = "off"
+collaborators = "off"

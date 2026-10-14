@@ -13,6 +13,7 @@ import { DEFAULT_ROLE, loadPack, type Pack } from "../schemas/pack.js";
 import type { Result } from "../schemas/result.js";
 import { AgentStartError, runAgent } from "../runtime/acp.js";
 import { RENDERED_PATHS, renderRole } from "../runtime/render.js";
+import { BUILTIN_CHECKS } from "./checks.js";
 import { buildEnvelope } from "./envelope.js";
 import { FoundryError } from "./errors.js";
 import * as git from "./git.js";
@@ -174,6 +175,24 @@ export async function processItem(ws: Workspace, itemId: string): Promise<Outcom
       });
     }
 
+    // Pack verifiers (built-in checks): advisory findings go to the gate,
+    // a blocking failure sends the item back.
+    if (step.verifiers.length) {
+      const pack = packOf(run);
+      const changedFiles = commit ? (await git.changedFiles(wt.path, wt.base, commit)) : [];
+      for (const id of step.verifiers) {
+        const def = pack?.verifiers.get(id);
+        const check = def && BUILTIN_CHECKS.get(def.builtin);
+        if (!def || !check) continue;
+        const r = await check({ worktree: wt.path, step, result, changedFiles, inputs: JSON.parse(item.inputs_json ?? "[]") });
+        await ledger.record(itemId, owner, "checked", { verifier: id, severity: def.severity, pass: r.pass, findings: r.findings });
+        if (!r.pass && def.severity === "blocking") {
+          return await sendBack("verifier", new FoundryError("verifier", `check ${id} failed: ${r.findings.slice(0, 3).join("; ")}`, `foundry status ${itemId}`));
+        }
+        for (const f of r.pass ? [] : r.findings) await ledger.addNote(itemId, item.attempt, "check", id, f);
+      }
+    }
+
     if (step.review && step.type === "agent") {
       out(`${itemId} review by ${step.review}`);
       try {
@@ -230,12 +249,23 @@ async function runSession(ws: Workspace, item: Item, run: Run, step: Step, wt: g
     fs.copyFileSync(path.join(pack!.dir!, k), dest);
     context.push(path.join(".foundry", "pack", k));
   }
+  for (const k of review ? [] : step.context) {
+    if (context.includes(path.join(".foundry", "pack", k))) continue;
+    const dest = path.join(wt.path, ".foundry", "pack", k);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(path.join(pack!.dir!, k), dest);
+    context.push(path.join(".foundry", "pack", k));
+  }
   if (fs.existsSync(path.join(wt.path, "AGENTS.md"))) context.push("AGENTS.md");
 
+  // Layered rules, general to specific: a team's own file for a layer
+  // (foundry.toml [rules]) replaces the pack's default for that layer.
   const rules: { layer: string; text: string }[] = [];
   for (const layer of ["org", "team", "project"] as const) {
-    const file = ws.config.rules[layer];
-    if (file && fs.existsSync(path.resolve(ws.repo, file))) rules.push({ layer, text: fs.readFileSync(path.resolve(ws.repo, file), "utf8") });
+    const own = ws.config.rules[layer] ? path.resolve(ws.repo, ws.config.rules[layer]!) : null;
+    const packDefault = pack?.dir ? path.join(pack.dir, "rules", `${layer}.md`) : null;
+    const file = [own, packDefault].find((f) => f && fs.existsSync(f));
+    if (file) rules.push({ layer, text: fs.readFileSync(file, "utf8") });
   }
 
   const inputs = JSON.parse(item.inputs_json ?? "[]") as InputRef[];

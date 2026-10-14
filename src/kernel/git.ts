@@ -109,6 +109,10 @@ export async function resetWorktree(wt: string): Promise<void> {
   await git(wt, ["clean", "-q", "-fd"]);
 }
 
+export async function changedFiles(cwd: string, from: string, to: string): Promise<string[]> {
+  return (await git(cwd, ["diff", "--name-only", from, to])).split("\n").filter(Boolean);
+}
+
 export async function headSha(cwd: string, ref = "HEAD"): Promise<string> {
   return git(cwd, ["rev-parse", ref]);
 }

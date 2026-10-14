@@ -1,0 +1,1213 @@
+formula = "aidlc"
+version = 1
+title = "AI-DLC"
+
+[[steps]]
+id = "intent-capture"
+phase = "ideation"
+role = "aidlc-product-agent"
+instructions = "steps/intent-capture.md"
+goal = "Run the AI-DLC stage \"Intent Capture & Framing\" (ideation) at the run's depth. It produces: intent-statement, stakeholder-map, intent-capture-questions."
+needs = []
+gate = "human"
+review = "aidlc-product-lead-agent"
+max_attempts = 3
+conditional = false
+environment_change = false
+outputs = [ "intent-statement", "stakeholder-map", "intent-capture-questions" ]
+inputs = []
+verifiers = [ "claim-sources", "required-sections", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-architect-agent" ]
+
+[[steps]]
+id = "market-research"
+phase = "ideation"
+role = "aidlc-product-agent"
+instructions = "steps/market-research.md"
+goal = "Run the AI-DLC stage \"market-research\" (ideation) at the run's depth. It produces: competitive-analysis, market-trends, build-vs-buy, market-research-questions. It runs only when it applies: Execute when initiative has external market positioning or build-vs-buy considerations. Skip for internal tools, bug fixes, or refactors. If it does not apply, submit \"skipped\" with the reason."
+needs = [ "intent-capture" ]
+gate = "human"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "competitive-analysis", "market-trends", "build-vs-buy", "market-research-questions" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = []
+support_roles = []
+
+[[steps.inputs]]
+from = "intent-capture"
+name = "intent-statement"
+required = true
+
+[[steps]]
+id = "feasibility"
+phase = "ideation"
+role = "aidlc-architect-agent"
+instructions = "steps/feasibility.md"
+goal = "Run the AI-DLC stage \"Feasibility & Constraints\" (ideation) at the run's depth. It produces: feasibility-assessment, constraint-register, raid-log, feasibility-questions. It runs only when it applies: Execute when there are integration constraints, regulatory requirements, or significant technical uncertainty. Skip for trivial changes with no technical risk. If it does not apply, submit \"skipped\" with the reason."
+needs = [ "intent-capture", "market-research" ]
+gate = "human"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "feasibility-assessment", "constraint-register", "raid-log", "feasibility-questions" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-aws-platform-agent", "aidlc-compliance-agent" ]
+
+[[steps.inputs]]
+from = "intent-capture"
+name = "intent-statement"
+required = true
+
+[[steps.inputs]]
+from = "market-research"
+name = "competitive-analysis"
+required = false
+
+[[steps.inputs]]
+from = "market-research"
+name = "market-trends"
+required = false
+
+[[steps.inputs]]
+from = "market-research"
+name = "build-vs-buy"
+required = false
+
+[[steps]]
+id = "scope-definition"
+phase = "ideation"
+role = "aidlc-product-agent"
+instructions = "steps/scope-definition.md"
+goal = "Run the AI-DLC stage \"scope-definition\" (ideation) at the run's depth. It produces: scope-document, intent-backlog, scope-definition-questions."
+needs = [ "intent-capture", "feasibility" ]
+gate = "human"
+max_attempts = 3
+conditional = false
+environment_change = false
+outputs = [ "scope-document", "intent-backlog", "scope-definition-questions" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-delivery-agent" ]
+
+[[steps.inputs]]
+from = "intent-capture"
+name = "intent-statement"
+required = true
+
+[[steps.inputs]]
+from = "feasibility"
+name = "feasibility-assessment"
+required = false
+
+[[steps.inputs]]
+from = "feasibility"
+name = "constraint-register"
+required = false
+
+[[steps]]
+id = "team-formation"
+phase = "ideation"
+role = "aidlc-delivery-agent"
+instructions = "steps/team-formation.md"
+goal = "Run the AI-DLC stage \"team-formation\" (ideation) at the run's depth. It produces: team-assessment, skill-matrix, mob-composition, team-formation-questions. It runs only when it applies: Execute when team composition, capacity, or mob planning is relevant. Skip for solo developer or small team projects. If it does not apply, submit \"skipped\" with the reason."
+needs = [ "scope-definition" ]
+gate = "human"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "team-assessment", "skill-matrix", "mob-composition", "team-formation-questions" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = []
+support_roles = []
+
+[[steps.inputs]]
+from = "scope-definition"
+name = "scope-document"
+required = true
+
+[[steps.inputs]]
+from = "scope-definition"
+name = "intent-backlog"
+required = true
+
+[[steps.inputs]]
+from = "feasibility"
+name = "feasibility-assessment"
+required = false
+
+[[steps]]
+id = "rough-mockups"
+phase = "ideation"
+role = "aidlc-design-agent"
+instructions = "steps/rough-mockups.md"
+goal = "Run the AI-DLC stage \"rough-mockups\" (ideation) at the run's depth. It produces: wireframes, user-flow, rough-mockups-questions. It runs only when it applies: Execute when user-facing UI is part of the initiative; for API/backend, produce system interaction diagrams. Skip for non-UI, API-only, or infrastructure-only initiatives. If it does not apply, submit \"skipped\" with the reason."
+needs = [ "scope-definition", "team-formation" ]
+gate = "human"
+review = "aidlc-product-lead-agent"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "wireframes", "user-flow", "rough-mockups-questions" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-product-agent" ]
+
+[[steps.inputs]]
+from = "intent-capture"
+name = "intent-statement"
+required = true
+
+[[steps.inputs]]
+from = "scope-definition"
+name = "scope-document"
+required = true
+
+[[steps.inputs]]
+from = "scope-definition"
+name = "intent-backlog"
+required = true
+
+[[steps]]
+id = "approval-handoff"
+phase = "ideation"
+role = "aidlc-delivery-agent"
+instructions = "steps/approval-handoff.md"
+goal = "Run the AI-DLC stage \"Approval & Handoff\" (ideation) at the run's depth. It produces: initiative-brief, decision-log, approval-handoff-questions."
+needs = [ "intent-capture", "feasibility", "scope-definition", "team-formation", "rough-mockups" ]
+gate = "human"
+max_attempts = 3
+conditional = false
+environment_change = false
+outputs = [ "initiative-brief", "decision-log", "approval-handoff-questions" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-product-agent" ]
+
+[[steps.inputs]]
+from = "intent-capture"
+name = "intent-statement"
+required = true
+
+[[steps.inputs]]
+from = "intent-capture"
+name = "stakeholder-map"
+required = true
+
+[[steps.inputs]]
+from = "scope-definition"
+name = "scope-document"
+required = true
+
+[[steps.inputs]]
+from = "scope-definition"
+name = "intent-backlog"
+required = true
+
+[[steps.inputs]]
+from = "market-research"
+name = "competitive-analysis"
+required = false
+
+[[steps.inputs]]
+from = "feasibility"
+name = "feasibility-assessment"
+required = false
+
+[[steps.inputs]]
+from = "feasibility"
+name = "constraint-register"
+required = false
+
+[[steps.inputs]]
+from = "team-formation"
+name = "team-assessment"
+required = false
+
+[[steps.inputs]]
+from = "rough-mockups"
+name = "wireframes"
+required = false
+
+[[steps]]
+id = "reverse-engineering"
+phase = "inception"
+role = "aidlc-developer-agent"
+instructions = "steps/reverse-engineering.md"
+goal = "Run the AI-DLC stage \"reverse-engineering\" (inception) at the run's depth. It produces: business-overview, architecture, code-structure, api-documentation, component-inventory, technology-stack, dependencies, code-quality-assessment, reverse-engineering-timestamp. It runs only when it applies: Execute when project is brownfield. On rerun the Step 1 guard checks store freshness (codekb-scope-diff) - verified-CURRENT stores may be reused by human choice, anything else rescans. Skip for greenfield projects. If it does not apply, submit \"skipped\" with the reason."
+needs = []
+gate = "human"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "business-overview", "architecture", "code-structure", "api-documentation", "component-inventory", "technology-stack", "dependencies", "code-quality-assessment", "reverse-engineering-timestamp" ]
+inputs = []
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = [ "knowledge/aidlc-developer-agent/code-analysis-guide.md", "knowledge/aidlc-developer-agent/re-artifacts.md" ]
+support_roles = [ "aidlc-architect-agent" ]
+
+[[steps]]
+id = "practices-discovery"
+phase = "inception"
+role = "aidlc-pipeline-deploy-agent"
+instructions = "steps/practices-discovery.md"
+goal = "Run the AI-DLC stage \"practices-discovery\" (inception) at the run's depth. It produces: team-practices, discovered-rules, evidence, practices-discovery-timestamp. It runs only when it applies: Always rerun for freshness. Brownfield discovers from evidence + reverse-engineering artifacts. Greenfield prompts user via structured questions using org.md defaults. If it does not apply, submit \"skipped\" with the reason."
+needs = [ "reverse-engineering" ]
+gate = "human"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "team-practices", "discovered-rules", "evidence", "practices-discovery-timestamp" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-quality-agent", "aidlc-developer-agent", "aidlc-devsecops-agent" ]
+
+[[steps.inputs]]
+from = "reverse-engineering"
+name = "code-structure"
+required = false
+conditional_on = "brownfield"
+
+[[steps.inputs]]
+from = "reverse-engineering"
+name = "technology-stack"
+required = false
+conditional_on = "brownfield"
+
+[[steps.inputs]]
+from = "reverse-engineering"
+name = "dependencies"
+required = false
+conditional_on = "brownfield"
+
+[[steps.inputs]]
+from = "reverse-engineering"
+name = "code-quality-assessment"
+required = false
+conditional_on = "brownfield"
+
+[[steps.inputs]]
+from = "reverse-engineering"
+name = "architecture"
+required = false
+conditional_on = "brownfield"
+
+[[steps.inputs]]
+from = "reverse-engineering"
+name = "business-overview"
+required = false
+conditional_on = "brownfield"
+
+[[steps]]
+id = "requirements-analysis"
+phase = "inception"
+role = "aidlc-product-agent"
+instructions = "steps/requirements-analysis.md"
+goal = "Run the AI-DLC stage \"requirements-analysis\" (inception) at the run's depth. It produces: requirements, requirements-analysis-questions."
+needs = [ "approval-handoff", "reverse-engineering" ]
+gate = "human"
+review = "aidlc-product-lead-agent"
+max_attempts = 3
+conditional = false
+environment_change = false
+outputs = [ "requirements", "requirements-analysis-questions" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = [ "knowledge/aidlc-product-agent/corner-checklist.md" ]
+support_roles = []
+
+[[steps.inputs]]
+from = "intent-capture"
+name = "intent-statement"
+required = false
+
+[[steps.inputs]]
+from = "scope-definition"
+name = "scope-document"
+required = false
+
+[[steps.inputs]]
+from = "reverse-engineering"
+name = "business-overview"
+required = false
+conditional_on = "brownfield"
+
+[[steps.inputs]]
+from = "reverse-engineering"
+name = "architecture"
+required = false
+conditional_on = "brownfield"
+
+[[steps.inputs]]
+from = "reverse-engineering"
+name = "code-structure"
+required = false
+conditional_on = "brownfield"
+
+[[steps.inputs]]
+from = "practices-discovery"
+name = "team-practices"
+required = false
+
+[[steps]]
+id = "user-stories"
+phase = "inception"
+role = "aidlc-product-agent"
+instructions = "steps/user-stories.md"
+goal = "Run the AI-DLC stage \"user-stories\" (inception) at the run's depth. It produces: stories, personas, user-stories-assessment, traceability. It runs only when it applies: Execute when user-facing features, multiple personas, complex business logic, or cross-team work is involved. Skip for pure refactoring, isolated bug fixes, infrastructure-only changes, or developer tooling. If it does not apply, submit \"skipped\" with the reason."
+needs = [ "requirements-analysis" ]
+gate = "human"
+review = "aidlc-product-lead-agent"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "stories", "personas", "user-stories-assessment", "traceability" ]
+verifiers = [ "required-sections", "traceability", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-design-agent", "aidlc-developer-agent", "aidlc-quality-agent" ]
+
+[[steps.inputs]]
+from = "requirements-analysis"
+name = "requirements"
+required = true
+
+[[steps.inputs]]
+from = "reverse-engineering"
+name = "business-overview"
+required = false
+conditional_on = "brownfield"
+
+[[steps.inputs]]
+from = "reverse-engineering"
+name = "component-inventory"
+required = false
+conditional_on = "brownfield"
+
+[[steps.inputs]]
+from = "practices-discovery"
+name = "team-practices"
+required = false
+
+[[steps]]
+id = "refined-mockups"
+phase = "inception"
+role = "aidlc-design-agent"
+instructions = "steps/refined-mockups.md"
+goal = "Run the AI-DLC stage \"refined-mockups\" (inception) at the run's depth. It produces: mockups, interaction-spec, design-system-mapping, accessibility-checklist, refined-mockups-questions. It runs only when it applies: Execute when user-facing UI exists and rough mockups were produced in Ideation; for APIs, refine interaction diagrams If it does not apply, submit \"skipped\" with the reason."
+needs = [ "user-stories" ]
+gate = "human"
+review = "aidlc-product-lead-agent"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "mockups", "interaction-spec", "design-system-mapping", "accessibility-checklist", "refined-mockups-questions" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = [ "knowledge/aidlc-design-agent/component-spec-template.md" ]
+support_roles = [ "aidlc-product-agent" ]
+
+[[steps.inputs]]
+from = "rough-mockups"
+name = "wireframes"
+required = true
+
+[[steps.inputs]]
+from = "rough-mockups"
+name = "user-flow"
+required = true
+
+[[steps.inputs]]
+from = "user-stories"
+name = "stories"
+required = false
+
+[[steps.inputs]]
+from = "requirements-analysis"
+name = "requirements"
+required = true
+
+[[steps.inputs]]
+from = "practices-discovery"
+name = "team-practices"
+required = false
+
+[[steps]]
+id = "domain-design"
+phase = "inception"
+role = "aidlc-architect-agent"
+instructions = "steps/domain-design.md"
+goal = "Run the AI-DLC stage \"domain-design\" (inception) at the run's depth. It produces: components, decisions, traceability. It runs only when it applies: Execute when new components or logical building blocks are needed. Skip when changes are modifications to existing components only. If it does not apply, submit \"skipped\" with the reason."
+needs = [ "requirements-analysis", "refined-mockups" ]
+gate = "human"
+review = "aidlc-architecture-reviewer-agent"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "components", "decisions", "traceability" ]
+verifiers = [ "required-sections", "traceability", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-aws-platform-agent", "aidlc-design-agent" ]
+
+[[steps.inputs]]
+from = "requirements-analysis"
+name = "requirements"
+required = true
+
+[[steps.inputs]]
+from = "user-stories"
+name = "stories"
+required = false
+
+[[steps.inputs]]
+from = "reverse-engineering"
+name = "architecture"
+required = false
+conditional_on = "brownfield"
+
+[[steps.inputs]]
+from = "reverse-engineering"
+name = "component-inventory"
+required = false
+conditional_on = "brownfield"
+
+[[steps.inputs]]
+from = "practices-discovery"
+name = "team-practices"
+required = false
+
+[[steps]]
+id = "units-generation"
+phase = "inception"
+role = "aidlc-architect-agent"
+instructions = "steps/units-generation.md"
+goal = "Run the AI-DLC stage \"units-generation\" (inception) at the run's depth. It produces: unit-of-work, unit-of-work-dependency, unit-of-work-story-map, traceability. List the units in your result as outputs.\"unit-of-work\" (one name per unit)."
+needs = [ "domain-design" ]
+gate = "human"
+review = "aidlc-architecture-reviewer-agent"
+max_attempts = 3
+conditional = false
+environment_change = false
+outputs = [ "unit-of-work", "unit-of-work-dependency", "unit-of-work-story-map", "traceability" ]
+verifiers = [ "required-sections", "traceability", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-delivery-agent" ]
+
+[[steps.inputs]]
+from = "domain-design"
+name = "components"
+required = true
+
+[[steps.inputs]]
+from = "domain-design"
+name = "decisions"
+required = false
+
+[[steps.inputs]]
+from = "requirements-analysis"
+name = "requirements"
+required = true
+
+[[steps.inputs]]
+from = "user-stories"
+name = "stories"
+required = false
+
+[[steps]]
+id = "contract-design"
+phase = "inception"
+role = "aidlc-architect-agent"
+instructions = "steps/contract-design.md"
+goal = "Run the AI-DLC stage \"contract-design\" (inception) at the run's depth. It produces: contract-summary. It runs only when it applies: Execute when the system has any formal contract to pin down — an inter-unit boundary (more than one unit that must integrate) OR a unit that exposes a public/external API consumed outside the system. Skip only for a single self-contained unit with no inter-unit boundaries and no externally consumed API. If it does not apply, submit \"skipped\" with the reason."
+needs = [ "units-generation" ]
+gate = "human"
+review = "aidlc-architecture-reviewer-agent"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "contract-summary" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-aws-platform-agent" ]
+
+[[steps.inputs]]
+from = "units-generation"
+name = "unit-of-work"
+required = true
+
+[[steps.inputs]]
+from = "units-generation"
+name = "unit-of-work-dependency"
+required = true
+
+[[steps.inputs]]
+from = "domain-design"
+name = "components"
+required = false
+
+[[steps.inputs]]
+from = "requirements-analysis"
+name = "requirements"
+required = false
+
+[[steps]]
+id = "delivery-planning"
+phase = "inception"
+role = "aidlc-delivery-agent"
+instructions = "steps/delivery-planning.md"
+goal = "Run the AI-DLC stage \"delivery-planning\" (inception) at the run's depth. It produces: bolt-plan, team-allocation, risk-and-sequencing-rationale, external-dependency-map, delivery-planning-questions."
+needs = [ "units-generation" ]
+gate = "human"
+max_attempts = 3
+conditional = false
+environment_change = false
+outputs = [ "bolt-plan", "team-allocation", "risk-and-sequencing-rationale", "external-dependency-map", "delivery-planning-questions" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-architect-agent" ]
+
+[[steps.inputs]]
+from = "requirements-analysis"
+name = "requirements"
+required = true
+
+[[steps.inputs]]
+from = "user-stories"
+name = "stories"
+required = false
+
+[[steps.inputs]]
+from = "refined-mockups"
+name = "mockups"
+required = false
+
+[[steps.inputs]]
+from = "domain-design"
+name = "components"
+required = true
+
+[[steps.inputs]]
+from = "units-generation"
+name = "unit-of-work"
+required = true
+
+[[steps.inputs]]
+from = "units-generation"
+name = "unit-of-work-dependency"
+required = true
+
+[[steps.inputs]]
+from = "units-generation"
+name = "unit-of-work-story-map"
+required = false
+
+[[steps.inputs]]
+from = "contract-design"
+name = "contract-summary"
+required = false
+
+[[steps.inputs]]
+from = "practices-discovery"
+name = "team-practices"
+required = false
+
+[[steps]]
+id = "functional-design"
+phase = "construction"
+role = "aidlc-architect-agent"
+instructions = "steps/functional-design.md"
+goal = "Run the AI-DLC stage \"functional-design\" (construction) at the run's depth. It produces: entities, rules, functional-spec, traceability, frontend-components (optional). When the plan lists units, it runs once per unit-of-work and your unit is in the envelope; otherwise it runs once for the whole change. It runs only when it applies: New data models, complex business logic, or business rules need design. Skip if simple logic changes with no new business logic. If it does not apply, submit \"skipped\" with the reason."
+needs = [ "units-generation", "contract-design" ]
+per = "unit-of-work"
+gate = "human"
+review = "aidlc-architecture-reviewer-agent"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "entities", "rules", "functional-spec", "traceability", "frontend-components" ]
+verifiers = [ "linter", "required-sections", "traceability", "type-check", "upstream-coverage" ]
+context = [ "knowledge/aidlc-product-agent/corner-checklist.md" ]
+support_roles = [ "aidlc-developer-agent" ]
+
+[[steps.inputs]]
+from = "units-generation"
+name = "unit-of-work"
+required = true
+
+[[steps.inputs]]
+from = "units-generation"
+name = "unit-of-work-story-map"
+required = false
+
+[[steps.inputs]]
+from = "requirements-analysis"
+name = "requirements"
+required = true
+
+[[steps.inputs]]
+from = "domain-design"
+name = "components"
+required = true
+
+[[steps.inputs]]
+from = "contract-design"
+name = "contract-summary"
+required = false
+
+[[steps]]
+id = "nfr-requirements"
+phase = "construction"
+role = "aidlc-architect-agent"
+instructions = "steps/nfr-requirements.md"
+goal = "Run the AI-DLC stage \"NFR Requirements\" (construction) at the run's depth. It produces: performance-requirements, security-requirements, scalability-requirements, reliability-requirements, observability-requirements, tech-stack-decisions, traceability. When the plan lists units, it runs once per unit-of-work and your unit is in the envelope; otherwise it runs once for the whole change. It runs only when it applies: Performance, security, scalability, reliability, or observability requirements needed, or tech stack selection needed. Skip if no NFR requirements and tech stack already determined. If it does not apply, submit \"skipped\" with the reason."
+needs = [ "units-generation", "functional-design" ]
+per = "unit-of-work"
+gate = "human"
+review = "aidlc-architecture-reviewer-agent"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "performance-requirements", "security-requirements", "scalability-requirements", "reliability-requirements", "observability-requirements", "tech-stack-decisions", "traceability" ]
+verifiers = [ "linter", "required-sections", "traceability", "type-check", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-devsecops-agent", "aidlc-compliance-agent", "aidlc-quality-agent" ]
+
+[[steps.inputs]]
+from = "functional-design"
+name = "functional-spec"
+required = true
+
+[[steps.inputs]]
+from = "functional-design"
+name = "rules"
+required = true
+
+[[steps.inputs]]
+from = "requirements-analysis"
+name = "requirements"
+required = true
+
+[[steps.inputs]]
+from = "contract-design"
+name = "contract-summary"
+required = false
+
+[[steps.inputs]]
+from = "reverse-engineering"
+name = "technology-stack"
+required = false
+conditional_on = "brownfield"
+
+[[steps]]
+id = "nfr-design"
+phase = "construction"
+role = "aidlc-architect-agent"
+instructions = "steps/nfr-design.md"
+goal = "Run the AI-DLC stage \"NFR Design\" (construction) at the run's depth. It produces: performance-design, security-design, scalability-design, reliability-design, observability-design, logical-components, traceability. When the plan lists units, it runs once per unit-of-work and your unit is in the envelope; otherwise it runs once for the whole change. It runs only when it applies: NFR Requirements was executed and NFR patterns need design. Skip if NFR Requirements was skipped. If it does not apply, submit \"skipped\" with the reason."
+needs = [ "units-generation", "nfr-requirements" ]
+per = "unit-of-work"
+gate = "human"
+review = "aidlc-architecture-reviewer-agent"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "performance-design", "security-design", "scalability-design", "reliability-design", "observability-design", "logical-components", "traceability" ]
+verifiers = [ "linter", "required-sections", "traceability", "type-check", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-aws-platform-agent" ]
+
+[[steps.inputs]]
+from = "nfr-requirements"
+name = "performance-requirements"
+required = true
+
+[[steps.inputs]]
+from = "nfr-requirements"
+name = "security-requirements"
+required = true
+
+[[steps.inputs]]
+from = "nfr-requirements"
+name = "scalability-requirements"
+required = true
+
+[[steps.inputs]]
+from = "nfr-requirements"
+name = "reliability-requirements"
+required = true
+
+[[steps.inputs]]
+from = "nfr-requirements"
+name = "observability-requirements"
+required = true
+
+[[steps.inputs]]
+from = "nfr-requirements"
+name = "tech-stack-decisions"
+required = true
+
+[[steps.inputs]]
+from = "functional-design"
+name = "functional-spec"
+required = true
+
+[[steps.inputs]]
+from = "contract-design"
+name = "contract-summary"
+required = false
+
+[[steps]]
+id = "infrastructure-design"
+phase = "construction"
+role = "aidlc-aws-platform-agent"
+instructions = "steps/infrastructure-design.md"
+goal = "Run the AI-DLC stage \"infrastructure-design\" (construction) at the run's depth. It produces: infrastructure-specification, monitoring-design, cicd-pipeline, traceability. When the plan lists units, it runs once per unit-of-work and your unit is in the envelope; otherwise it runs once for the whole change. It runs only when it applies: Infrastructure services need mapping, deployment architecture required, or cloud resources needed. Skip if no infrastructure changes and infrastructure already defined. If it does not apply, submit \"skipped\" with the reason."
+needs = [ "units-generation", "nfr-design" ]
+per = "unit-of-work"
+gate = "human"
+review = "aidlc-architecture-reviewer-agent"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "infrastructure-specification", "monitoring-design", "cicd-pipeline", "traceability" ]
+verifiers = [ "linter", "required-sections", "traceability", "type-check", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-devsecops-agent", "aidlc-compliance-agent" ]
+
+[[steps.inputs]]
+from = "nfr-design"
+name = "performance-design"
+required = true
+
+[[steps.inputs]]
+from = "nfr-design"
+name = "security-design"
+required = true
+
+[[steps.inputs]]
+from = "nfr-design"
+name = "scalability-design"
+required = true
+
+[[steps.inputs]]
+from = "nfr-design"
+name = "reliability-design"
+required = true
+
+[[steps.inputs]]
+from = "nfr-design"
+name = "observability-design"
+required = true
+
+[[steps.inputs]]
+from = "nfr-design"
+name = "logical-components"
+required = true
+
+[[steps.inputs]]
+from = "domain-design"
+name = "components"
+required = true
+
+[[steps.inputs]]
+from = "functional-design"
+name = "functional-spec"
+required = true
+
+[[steps.inputs]]
+from = "contract-design"
+name = "contract-summary"
+required = false
+
+[[steps]]
+id = "code-generation"
+phase = "construction"
+role = "aidlc-developer-agent"
+instructions = "steps/code-generation.md"
+goal = "Run the AI-DLC stage \"code-generation\" (construction) at the run's depth. It produces: code-generation-plan, unit-test-instructions, code-summary, traceability. When the plan lists units, it runs once per unit-of-work and your unit is in the envelope; otherwise it runs once for the whole change."
+needs = [ "units-generation", "functional-design", "nfr-requirements", "nfr-design", "infrastructure-design" ]
+per = "unit-of-work"
+gate = "human"
+gate_note = "plan approval"
+review = "aidlc-architecture-reviewer-agent"
+max_attempts = 3
+conditional = false
+environment_change = false
+outputs = [ "code-generation-plan", "unit-test-instructions", "code-summary", "traceability" ]
+verifiers = [ "required-sections", "traceability" ]
+context = []
+support_roles = []
+
+[[steps.inputs]]
+from = "functional-design"
+name = "functional-spec"
+required = false
+
+[[steps.inputs]]
+from = "functional-design"
+name = "rules"
+required = false
+
+[[steps.inputs]]
+from = "functional-design"
+name = "entities"
+required = false
+
+[[steps.inputs]]
+from = "contract-design"
+name = "contract-summary"
+required = false
+
+[[steps.inputs]]
+from = "nfr-design"
+name = "performance-design"
+required = false
+
+[[steps.inputs]]
+from = "nfr-design"
+name = "security-design"
+required = false
+
+[[steps.inputs]]
+from = "infrastructure-design"
+name = "infrastructure-specification"
+required = false
+
+[[steps.inputs]]
+from = "units-generation"
+name = "unit-of-work"
+required = true
+
+[[steps.inputs]]
+from = "requirements-analysis"
+name = "requirements"
+required = true
+
+[[steps]]
+id = "build-and-test"
+phase = "construction"
+role = "aidlc-quality-agent"
+instructions = "steps/build-and-test.md"
+goal = "Run the AI-DLC stage \"Build and Test\" (construction) at the run's depth. It produces: build-instructions, integration-test-instructions, performance-test-instructions, security-test-instructions, build-and-test-summary, build-test-results, cross-unit-traceability."
+needs = [ "code-generation" ]
+gate = "human"
+max_attempts = 3
+conditional = false
+environment_change = false
+outputs = [ "build-instructions", "integration-test-instructions", "performance-test-instructions", "security-test-instructions", "build-and-test-summary", "build-test-results", "cross-unit-traceability" ]
+verifiers = [ "required-sections", "type-check", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-devsecops-agent" ]
+
+[[steps.inputs]]
+from = "code-generation"
+name = "code-generation-plan"
+required = true
+
+[[steps.inputs]]
+from = "code-generation"
+name = "unit-test-instructions"
+required = true
+
+[[steps.inputs]]
+from = "code-generation"
+name = "code-summary"
+required = true
+
+[[steps]]
+id = "ci-pipeline"
+phase = "construction"
+role = "aidlc-pipeline-deploy-agent"
+instructions = "steps/ci-pipeline.md"
+goal = "Run the AI-DLC stage \"CI Pipeline\" (construction) at the run's depth. It produces: ci-config, quality-gates, ci-pipeline-questions. It runs only when it applies: Execute when CI pipeline needs creation or significant modification. Skip if CI already exists and is adequate. If it does not apply, submit \"skipped\" with the reason."
+needs = [ "build-and-test" ]
+gate = "human"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "ci-config", "quality-gates", "ci-pipeline-questions" ]
+verifiers = [ "linter", "required-sections", "type-check", "upstream-coverage" ]
+context = []
+support_roles = []
+
+[[steps.inputs]]
+from = "code-generation"
+name = "code-summary"
+required = true
+
+[[steps.inputs]]
+from = "build-and-test"
+name = "build-and-test-summary"
+required = true
+
+[[steps.inputs]]
+from = "build-and-test"
+name = "build-test-results"
+required = true
+
+[[steps]]
+id = "deployment-pipeline"
+phase = "operation"
+role = "aidlc-pipeline-deploy-agent"
+instructions = "steps/deployment-pipeline.md"
+goal = "Run the AI-DLC stage \"deployment-pipeline\" (operation) at the run's depth. It produces: cd-config, deployment-strategy, rollback-runbook, deployment-pipeline-questions. It runs only when it applies: Execute when CD pipeline needs creation or significant modification If it does not apply, submit \"skipped\" with the reason."
+needs = [ "ci-pipeline", "infrastructure-design" ]
+gate = "human"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "cd-config", "deployment-strategy", "rollback-runbook", "deployment-pipeline-questions" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = []
+support_roles = []
+
+[[steps.inputs]]
+from = "ci-pipeline"
+name = "ci-config"
+required = true
+
+[[steps.inputs]]
+from = "ci-pipeline"
+name = "quality-gates"
+required = true
+
+[[steps.inputs]]
+from = "infrastructure-design"
+name = "infrastructure-specification"
+required = true
+
+[[steps.inputs]]
+from = "infrastructure-design"
+name = "cicd-pipeline"
+required = true
+
+[[steps]]
+id = "environment-provisioning"
+phase = "operation"
+role = "aidlc-aws-platform-agent"
+instructions = "steps/environment-provisioning.md"
+goal = "Run the AI-DLC stage \"environment-provisioning\" (operation) at the run's depth. It produces: environment-inventory, validation-report, environment-provisioning-questions. It runs only when it applies: Execute when AWS environments need provisioning or validation If it does not apply, submit \"skipped\" with the reason."
+needs = [ "infrastructure-design", "deployment-pipeline" ]
+gate = "human"
+max_attempts = 3
+conditional = true
+environment_change = true
+outputs = [ "environment-inventory", "validation-report", "environment-provisioning-questions" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-devsecops-agent", "aidlc-compliance-agent" ]
+
+[[steps.inputs]]
+from = "infrastructure-design"
+name = "infrastructure-specification"
+required = true
+
+[[steps.inputs]]
+from = "deployment-pipeline"
+name = "cd-config"
+required = true
+
+[[steps]]
+id = "deployment-execution"
+phase = "operation"
+role = "aidlc-pipeline-deploy-agent"
+instructions = "steps/deployment-execution.md"
+goal = "Run the AI-DLC stage \"deployment-execution\" (operation) at the run's depth. It produces: deployment-log, smoke-test-results, health-check-report, deployment-execution-questions. It runs only when it applies: Execute after deployment pipeline and environment are ready If it does not apply, submit \"skipped\" with the reason."
+needs = [ "deployment-pipeline", "environment-provisioning" ]
+gate = "human"
+max_attempts = 3
+conditional = true
+environment_change = true
+outputs = [ "deployment-log", "smoke-test-results", "health-check-report", "deployment-execution-questions" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-developer-agent" ]
+
+[[steps.inputs]]
+from = "deployment-pipeline"
+name = "cd-config"
+required = true
+
+[[steps.inputs]]
+from = "deployment-pipeline"
+name = "deployment-strategy"
+required = true
+
+[[steps.inputs]]
+from = "environment-provisioning"
+name = "environment-inventory"
+required = true
+
+[[steps.inputs]]
+from = "build-and-test"
+name = "build-test-results"
+required = true
+
+[[steps]]
+id = "observability-setup"
+phase = "operation"
+role = "aidlc-operations-agent"
+instructions = "steps/observability-setup.md"
+goal = "Run the AI-DLC stage \"observability-setup\" (operation) at the run's depth. It produces: dashboards, alarms, slo-config, log-queries, tracing-config, anomaly-config, observability-setup-questions. It runs only when it applies: Execute when monitoring, dashboards, alarms, or tracing need configuration If it does not apply, submit \"skipped\" with the reason."
+needs = [ "nfr-design", "infrastructure-design", "deployment-execution" ]
+gate = "human"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "dashboards", "alarms", "slo-config", "log-queries", "tracing-config", "anomaly-config", "observability-setup-questions" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = []
+support_roles = []
+
+[[steps.inputs]]
+from = "nfr-design"
+name = "performance-design"
+required = true
+
+[[steps.inputs]]
+from = "nfr-design"
+name = "security-design"
+required = true
+
+[[steps.inputs]]
+from = "nfr-design"
+name = "reliability-design"
+required = true
+
+[[steps.inputs]]
+from = "infrastructure-design"
+name = "monitoring-design"
+required = true
+
+[[steps.inputs]]
+from = "infrastructure-design"
+name = "infrastructure-specification"
+required = true
+
+[[steps]]
+id = "incident-response"
+phase = "operation"
+role = "aidlc-operations-agent"
+instructions = "steps/incident-response.md"
+goal = "Run the AI-DLC stage \"incident-response\" (operation) at the run's depth. It produces: runbooks, incident-plan, escalation-matrix, incident-response-questions. It runs only when it applies: Execute when operational runbooks and incident response procedures are needed If it does not apply, submit \"skipped\" with the reason."
+needs = [ "observability-setup" ]
+gate = "human"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "runbooks", "incident-plan", "escalation-matrix", "incident-response-questions" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = []
+support_roles = []
+
+[[steps.inputs]]
+from = "observability-setup"
+name = "dashboards"
+required = true
+
+[[steps.inputs]]
+from = "observability-setup"
+name = "alarms"
+required = true
+
+[[steps.inputs]]
+from = "nfr-design"
+name = "reliability-design"
+required = true
+
+[[steps.inputs]]
+from = "nfr-design"
+name = "security-design"
+required = true
+
+[[steps.inputs]]
+from = "infrastructure-design"
+name = "infrastructure-specification"
+required = true
+
+[[steps]]
+id = "performance-validation"
+phase = "operation"
+role = "aidlc-quality-agent"
+instructions = "steps/performance-validation.md"
+goal = "Run the AI-DLC stage \"performance-validation\" (operation) at the run's depth. It produces: load-test-plan, load-test-results, nfr-validation-matrix, performance-validation-questions. It runs only when it applies: Execute when NFR performance targets need validation under load If it does not apply, submit \"skipped\" with the reason."
+needs = [ "nfr-requirements", "nfr-design", "observability-setup" ]
+gate = "human"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "load-test-plan", "load-test-results", "nfr-validation-matrix", "performance-validation-questions" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = []
+support_roles = []
+
+[[steps.inputs]]
+from = "nfr-requirements"
+name = "performance-requirements"
+required = true
+
+[[steps.inputs]]
+from = "nfr-requirements"
+name = "scalability-requirements"
+required = true
+
+[[steps.inputs]]
+from = "nfr-design"
+name = "performance-design"
+required = true
+
+[[steps.inputs]]
+from = "nfr-design"
+name = "scalability-design"
+required = true
+
+[[steps.inputs]]
+from = "observability-setup"
+name = "dashboards"
+required = true
+
+[[steps]]
+id = "feedback-optimization"
+phase = "operation"
+role = "aidlc-operations-agent"
+instructions = "steps/feedback-optimization.md"
+goal = "Run the AI-DLC stage \"Feedback & Optimization\" (operation) at the run's depth. It produces: slo-report, cost-analysis, drift-report, feedback-loop, feedback-optimization-questions. It runs only when it applies: Execute when ongoing operational monitoring and optimization are needed If it does not apply, submit \"skipped\" with the reason."
+needs = [ "observability-setup", "deployment-execution", "incident-response", "performance-validation" ]
+gate = "human"
+max_attempts = 3
+conditional = true
+environment_change = false
+outputs = [ "slo-report", "cost-analysis", "drift-report", "feedback-loop", "feedback-optimization-questions" ]
+verifiers = [ "required-sections", "upstream-coverage" ]
+context = []
+support_roles = [ "aidlc-aws-platform-agent" ]
+
+[[steps.inputs]]
+from = "observability-setup"
+name = "dashboards"
+required = true
+
+[[steps.inputs]]
+from = "observability-setup"
+name = "alarms"
+required = true
+
+[[steps.inputs]]
+from = "observability-setup"
+name = "slo-config"
+required = true
+
+[[steps.inputs]]
+from = "deployment-execution"
+name = "deployment-log"
+required = true
+
+[[steps.inputs]]
+from = "performance-validation"
+name = "load-test-results"
+required = false
+
+[[steps.inputs]]
+from = "incident-response"
+name = "incident-plan"
+required = false

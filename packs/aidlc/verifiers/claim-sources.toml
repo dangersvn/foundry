@@ -1,0 +1,6 @@
+id = "claim-sources"
+builtin = "aidlc.claim-sources"
+severity = "advisory"
+description = "Checks Intent Capture claims carry source tags that resolve to the stage's confirmed source register and answers"
+matches = "**/{aidlc-docs,intents}/**"
+fire_on = "gate"

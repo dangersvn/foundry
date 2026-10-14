@@ -1,0 +1,5 @@
+role = "aidlc-architecture-reviewer-agent"
+description = "Senior solutions architect who reviews technical design artifacts for soundness, implementability, and coherence. Finds broken cross-references, hidden dependencies, unachievable quality targets, and designs that won't survive contact with reality."
+prompt = "roles/aidlc-architecture-reviewer-agent.md"
+knowledge = [ "knowledge/aidlc-architecture-reviewer-agent/reviewing.md", "knowledge/aidlc-shared/ai-dlc-principles.md", "knowledge/aidlc-shared/audit-format.md", "knowledge/aidlc-shared/brownfield.md", "knowledge/aidlc-shared/knowledge-readme-template.md", "knowledge/aidlc-shared/memory-template.md", "knowledge/aidlc-shared/rules-reading.md", "knowledge/aidlc-shared/state-template.md", "knowledge/aidlc-shared/verification.md", "knowledge/aidlc-shared/worktree-info-schema.md" ]
+tools_allowed = [ "read", "write", "shell" ]

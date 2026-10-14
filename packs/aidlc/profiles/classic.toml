@@ -1,0 +1,27 @@
+profile = "classic"
+description = "V1-style ceremony through Inception and Construction - the implicit default"
+steps = [ "reverse-engineering", "practices-discovery", "requirements-analysis", "user-stories", "refined-mockups", "domain-design", "units-generation", "contract-design", "delivery-planning", "functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation", "build-and-test" ]
+
+[params]
+depth = "Standard"
+test_strategy = "Standard"
+project_type = "auto"
+
+[settings]
+collaborators = false
+review = "advisory"
+learnings = false
+summary_confirmation = false
+skeleton = false
+plan_approval = true
+
+[source_settings]
+depth = "Standard"
+skeleton = "off"
+review_cap = "advisory"
+guard_policy = "off"
+sensors = "on"
+learnings = "on"
+summary_confirmation = "off"
+plan_approval = "on"
+collaborators = "off"

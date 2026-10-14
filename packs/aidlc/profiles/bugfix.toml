@@ -1,0 +1,28 @@
+profile = "bugfix"
+description = "Fix a specific bug"
+steps = [ "reverse-engineering", "requirements-analysis", "code-generation", "build-and-test", "deployment-pipeline", "deployment-execution" ]
+
+[params]
+depth = "Minimal"
+test_strategy = "Minimal"
+project_type = "brownfield"
+
+[settings]
+collaborators = false
+review = "advisory"
+learnings = false
+summary_confirmation = false
+skeleton = false
+plan_approval = true
+
+[source_settings]
+depth = "Minimal"
+skeleton = "off"
+review_cap = "advisory"
+guard_policy = "off"
+sensors = "on"
+learnings = "off"
+summary_confirmation = "off"
+plan_approval = "on"
+collaborators = "off"
+existing_code = true

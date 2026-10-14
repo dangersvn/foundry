@@ -92,6 +92,7 @@ function historyLines(p: EnvelopeParts): string[] {
     verifier: "verifier failure",
     refinery: "sent back by the merge queue",
     review: "review finding",
+    check: "check finding",
     note: "note",
     design: "design note",
   };

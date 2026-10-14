@@ -1,0 +1,6 @@
+id = "upstream-coverage"
+builtin = "aidlc.upstream-coverage"
+severity = "advisory"
+description = "Checks the stage's deliverables reference the upstream artifacts the stage frontmatter declares it consumes"
+matches = "**/{aidlc-docs,intents,codekb}/**"
+fire_on = "gate"

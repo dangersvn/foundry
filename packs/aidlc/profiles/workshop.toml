@@ -1,0 +1,28 @@
+profile = "workshop"
+description = "Facilitated group session with mandatory gates"
+steps = [ "reverse-engineering", "practices-discovery", "requirements-analysis", "user-stories", "refined-mockups", "domain-design", "units-generation", "contract-design", "delivery-planning", "functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation", "build-and-test", "ci-pipeline", "deployment-pipeline", "environment-provisioning", "deployment-execution", "observability-setup", "incident-response", "performance-validation", "feedback-optimization" ]
+
+[params]
+depth = "Standard"
+test_strategy = "Minimal"
+project_type = "auto"
+
+[settings]
+collaborators = false
+review = "advisory"
+learnings = false
+summary_confirmation = false
+skeleton = false
+plan_approval = true
+
+[source_settings]
+depth = "Standard"
+skeleton = "on"
+review_cap = "advisory"
+guard_policy = "off"
+sensors = "on"
+learnings = "on"
+summary_confirmation = "on"
+plan_approval = "on"
+collaborators = "off"
+testStrategy = "Minimal"

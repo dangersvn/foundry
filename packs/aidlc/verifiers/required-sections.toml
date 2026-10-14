@@ -1,0 +1,6 @@
+id = "required-sections"
+builtin = "aidlc.required-sections"
+severity = "advisory"
+description = "Checks at the gate that stage output contains the required H2 headings"
+matches = "**/{aidlc-docs,intents,codekb}/**"
+fire_on = "gate"

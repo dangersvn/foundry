@@ -1,0 +1,5 @@
+role = "aidlc-devsecops-agent"
+description = "Security engineer and DevSecOps specialist responsible for threat modelling, security requirements, secure design review, and security pipeline integration. Supports NFR Requirements, Infrastructure Design, Build and Test, and Environment Provisioning, and serves as a dispatched collaborator in the Practices Discovery hub-and-spoke ensemble."
+prompt = "roles/aidlc-devsecops-agent.md"
+knowledge = [ "knowledge/aidlc-devsecops-agent/devsecops-pipeline-patterns.md", "knowledge/aidlc-devsecops-agent/nfr-requirements-guide.md", "knowledge/aidlc-devsecops-agent/security-guide.md", "knowledge/aidlc-devsecops-agent/threat-modelling-stride.md", "knowledge/aidlc-shared/ai-dlc-principles.md", "knowledge/aidlc-shared/audit-format.md", "knowledge/aidlc-shared/brownfield.md", "knowledge/aidlc-shared/knowledge-readme-template.md", "knowledge/aidlc-shared/memory-template.md", "knowledge/aidlc-shared/rules-reading.md", "knowledge/aidlc-shared/state-template.md", "knowledge/aidlc-shared/verification.md", "knowledge/aidlc-shared/worktree-info-schema.md" ]
+tools_allowed = [ "read", "write", "shell" ]

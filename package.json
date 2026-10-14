@@ -10,6 +10,8 @@
   "files": [
     "dist/",
     "formulas/",
+    "packs/",
+    "docs/aidlc-rewrites.md",
     "examples/",
     "README.md"
   ],

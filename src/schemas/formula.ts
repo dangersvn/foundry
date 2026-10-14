@@ -28,6 +28,17 @@ export const Step = z.object({
   conditional: z.boolean().default(false),
   // A step that would change a real environment stops at a gate with its plan.
   environment_change: z.boolean().default(false),
+  // Named outputs later steps may read (imported packs list the artifacts).
+  outputs: z.array(z.string()).default([]),
+  // Pack verifiers run after `verify` (see verifiers/<id>.toml).
+  verifiers: z.array(z.string()).default([]),
+  // Pack files the step's instructions refer to; copied into the worktree.
+  context: z.array(z.string()).default([]),
+  // Roles that could help; recorded only (collaborators are off in v1).
+  support_roles: z.array(z.string()).default([]),
+  phase: z.string().optional(),
+  // What the gate is for, e.g. "plan approval".
+  gate_note: z.string().optional(),
 });
 export type Step = z.infer<typeof Step>;
 

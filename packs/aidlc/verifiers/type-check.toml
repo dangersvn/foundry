@@ -1,0 +1,5 @@
+id = "type-check"
+builtin = "aidlc.type-check"
+severity = "advisory"
+description = "Wraps the project's configured type-checker (tsc by default for v0.5.0); fires on TS/TSX code outputs"
+matches = "**/*.{ts,tsx}"

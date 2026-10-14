@@ -1,0 +1,3 @@
+detect_project_type = true
+dropped = [ "state-init", "workspace-detection", "workspace-scaffold" ]
+notes = "AI-DLC's initialization stages become run setup: workspace-detection's existing-code check sets the project_type parameter (brownfield when the repository has source files, else greenfield); state-init and workspace-scaffold are dropped because the ledger holds run state and the worktree is the workspace."

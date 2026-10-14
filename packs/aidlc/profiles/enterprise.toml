@@ -1,0 +1,26 @@
+profile = "enterprise"
+description = "Regulated enterprise feature, full audit trail"
+steps = [ "intent-capture", "market-research", "feasibility", "scope-definition", "team-formation", "rough-mockups", "approval-handoff", "reverse-engineering", "practices-discovery", "requirements-analysis", "user-stories", "refined-mockups", "domain-design", "units-generation", "contract-design", "delivery-planning", "functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation", "build-and-test", "ci-pipeline", "deployment-pipeline", "environment-provisioning", "deployment-execution", "observability-setup", "incident-response", "performance-validation", "feedback-optimization" ]
+
+[params]
+depth = "Comprehensive"
+test_strategy = "Comprehensive"
+project_type = "auto"
+
+[settings]
+collaborators = false
+review = "advisory"
+learnings = false
+summary_confirmation = false
+skeleton = false
+plan_approval = true
+
+[source_settings]
+depth = "Comprehensive"
+skeleton = "on"
+guard_policy = "strict"
+sensors = "on"
+learnings = "on"
+summary_confirmation = "on"
+plan_approval = "on"
+collaborators = "on"

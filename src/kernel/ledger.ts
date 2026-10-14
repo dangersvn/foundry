@@ -3,7 +3,7 @@
 // BEGIN IMMEDIATE transaction, so concurrent processes serialize on writes.
 import Database from "better-sqlite3";
 import { Kysely, SqliteDialect, sql, type Generated, type Selectable } from "kysely";
-import type { Formula, Step } from "../schemas/formula.js";
+import { Step as StepSchema, type Formula, type Step } from "../schemas/formula.js";
 import type { AgentDecision, Result } from "../schemas/result.js";
 import { FoundryError } from "./errors.js";
 
@@ -252,21 +252,7 @@ export class Ledger {
       title: r.title,
       verify: undefined,
       oneStep: true,
-      steps: [
-        {
-          id: r.stepId,
-          type: "agent",
-          role: "worker",
-          goal: r.goal,
-          needs: [],
-          verify: r.verify,
-          max_attempts: MAX_ATTEMPTS,
-          submit: false,
-          inputs: [],
-          conditional: false,
-          environment_change: false,
-        },
-      ],
+      steps: [StepSchema.parse({ id: r.stepId, goal: r.goal, verify: r.verify, submit: false })],
     };
     const { runId, itemIds } = await this.startRun({ formula, title: r.title, input: r.input, packDir: null });
     return { runId, itemId: itemIds[0]! };
@@ -393,6 +379,13 @@ export class Ledger {
       })
       .execute();
     await this.insertEvent(db, run.id, id, "created", "kernel", { formula: formula.formula, title, step: step.id, unit });
+    // A required input whose step finished without producing it is missing.
+    // One from a skipped step is absent by design and is not reported.
+    for (const want of step.inputs.filter((i) => i.required && i.name)) {
+      const from = inputs.filter((i) => i.step === want.from && i.status === "done");
+      const produced = from.some((i) => want.name! in i.outputs || i.artifacts.some((a) => a.path.includes(want.name!)));
+      if (from.length && !produced) await this.insertEvent(db, run.id, id, "input_missing", "kernel", { from: want.from, name: want.name });
+    }
     return id;
   }
 
@@ -569,6 +562,11 @@ export class Ledger {
   // An event about an item from outside its lease (agent commands, people).
   async note(itemId: string, type: string, actor: string, payload: Record<string, unknown>): Promise<void> {
     await this.tx(async (db) => this.insertEvent(db, await this.runOf(db, itemId), itemId, type, actor, payload));
+  }
+
+  // A run-level event (run setup, for instance).
+  async runNote(runId: string, type: string, payload: Record<string, unknown>): Promise<void> {
+    await this.tx((db) => this.insertEvent(db, runId, null, type, "kernel", payload));
   }
 
   async addArtifact(itemId: string, kind: string, path: string, contentHash: string | null = null): Promise<void> {

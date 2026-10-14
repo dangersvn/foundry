@@ -87,6 +87,16 @@ export class FoundryWorld extends World {
     return this.startFoundry(args).done;
   }
 
+  // The foundry CLI run from another directory (e.g. the Foundry repo itself).
+  async foundryAt(cwd: string, ...args: string[]): Promise<CliResult> {
+    const child = spawn(process.execPath, this.foundryArgs(args), { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout!.on("data", (d) => (stdout += d));
+    child.stderr!.on("data", (d) => (stderr += d));
+    return new Promise<CliResult>((resolve) => child.on("close", (code) => resolve({ code, stdout, stderr })));
+  }
+
   itemFrom(stdout: string): string {
     const m = stdout.match(/created (WI-\d+)/);
     if (!m) throw new Error(`no item id in output:\n${stdout}`);

@@ -1,0 +1,27 @@
+profile = "poc"
+description = "Prove feasibility fast"
+steps = [ "intent-capture", "reverse-engineering", "requirements-analysis", "code-generation", "build-and-test" ]
+
+[params]
+depth = "Minimal"
+test_strategy = "Minimal"
+project_type = "auto"
+
+[settings]
+collaborators = false
+review = "advisory"
+learnings = false
+summary_confirmation = false
+skeleton = false
+plan_approval = true
+
+[source_settings]
+depth = "Minimal"
+skeleton = "on"
+review_cap = "advisory"
+guard_policy = "off"
+sensors = "on"
+learnings = "on"
+summary_confirmation = "on"
+plan_approval = "off"
+collaborators = "off"

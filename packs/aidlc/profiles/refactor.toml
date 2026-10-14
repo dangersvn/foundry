@@ -1,0 +1,27 @@
+profile = "refactor"
+description = "Clean up existing code"
+steps = [ "reverse-engineering", "requirements-analysis", "functional-design", "code-generation", "build-and-test", "deployment-pipeline", "deployment-execution" ]
+
+[params]
+depth = "Minimal"
+test_strategy = "Minimal"
+project_type = "brownfield"
+
+[settings]
+collaborators = false
+review = "advisory"
+learnings = false
+summary_confirmation = false
+skeleton = false
+plan_approval = true
+
+[source_settings]
+depth = "Minimal"
+skeleton = "off"
+guard_policy = "off"
+sensors = "on"
+learnings = "on"
+summary_confirmation = "on"
+plan_approval = "on"
+collaborators = "off"
+existing_code = true

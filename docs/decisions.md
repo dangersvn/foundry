@@ -325,3 +325,97 @@ Each entry gives what was decided, the options, the choice and the reason.
 ## D37. Envelopes are kept
 - Every session's envelope is written to `.foundry/envelopes/WI-n-aN.md`
   and recorded as an artifact, so what an agent was told is auditable.
+
+## D38. The import works on calls, not raw text
+- A call is the inline code span holding an engine token, or a fenced-block
+  line holding one (with `\` continuations). Engine tokens: `{{INVOKE}}`,
+  `{{HARNESS_DIR}}`, `aidlc-*.ts` tool names, `aidlc engine`,
+  `aidlc-orchestrate`, `/aidlc`, and a code span that is just `next`.
+- Each call is matched whole against the rules in `docs/aidlc-rewrites.md`
+  (first match wins); an unmatched call fails the import with the file, line
+  and call. After writing, the importer scans every step and role prompt
+  again and fails if any engine token is left.
+- v2.11.0 has 144 calls: 119 in the 30 stages and 25 in the 14 agent
+  prompts; 37 rules cover them. The 3 initialization stages are dropped, so
+  their calls are not rewritten (the report counts them).
+- **Assumption:** rewriting role prompts too is in scope ("no call may
+  survive in the step instructions"; agents read their role prompt as well).
+  Knowledge files are copied without rewriting.
+
+## D39. What a stage becomes
+- id = slug; role = `lead_agent` (support agents recorded, collaborators
+  off); instructions = rewritten body with a short Foundry header (what
+  `<record>`, `<unit>` mean, how to ask, submit instead of asking for
+  approval); `requires_stage` -> needs (minus initialization stages);
+  `for_each` -> per; `produces`/`optional_produces` -> outputs; `consumes` ->
+  inputs from each producing stage, keeping `required` and
+  `conditional_on`; `reviewer` -> review; `sensors` -> verifiers;
+  `CONDITIONAL` -> conditional (may be skipped with a reason).
+- Every step has a human gate: all 30 stage texts end in an Approve /
+  Request Changes approval, and v1 is manual mode. code-generation's gate is
+  marked "plan approval" (its text has the plan-approval checkpoint).
+- `<record>` is `aidlc-docs/<run>` in the worktree, so artifacts are
+  committed with the item.
+- Environment-changing stages (listed in docs/aidlc-rewrites.md):
+  environment-provisioning and deployment-execution. **Assumption:** the
+  other operation stages (observability, performance, incident response,
+  feedback) only write plans and configuration in the repo.
+- Step order: dependency order, then phase order, then slug.
+
+## D40. Profiles compile at run start
+- `profiles/<scope>.toml` lists the stages whose `scopes` include it.
+  Compiling keeps those steps, turns a need on a dropped step into a need on
+  that step's own needs, drops a `per` whose producer is not in the plan (so
+  bugfix's code-generation runs once), and drops inputs from absent steps
+  (absent by the profile's design).
+- Run parameters: `depth` from the scope, `test_strategy` from its
+  `testStrategy` or else its depth, `project_type` brownfield for scopes with
+  `existing_code: true`, else detected at run setup (brownfield when the repo
+  tracks source files). `--param k=v` overrides.
+- Settings are AI-DLC's simplest for every profile: collaborators off,
+  reviews advisory, learnings off, summary confirmation off, no walking
+  skeleton, plan approval on. The scope's own values are kept as
+  `source_settings` for the record.
+- `foundry plan <pack> --profile <p> --dry-run [--json]` prints the compiled
+  plan; `foundry run`/`add` take the same `--profile`/`--param`.
+
+## D41. A `[project] test_command` setting (beyond the brief)
+- What: AI-DLC's code stages leave verification to the agent ("build and
+  test"), but rule 4 needs the engine to run the tests.
+- Choice: `[project] test_command` in foundry.toml; when a formula has no
+  `verify` of its own, the refinery runs it on every merge. Without it the
+  plan says "merge verify: none".
+
+## D42. The six sensors as built-in checks
+- Pack `verifiers/<id>.toml` name a built-in check (`aidlc.<id>`, in
+  `src/kernel/checks.ts`) and a severity; all six are advisory in AI-DLC and
+  stay advisory: findings become notes shown at the gate, never a retry.
+- Ports follow each sensor's documented contract but are simpler:
+  required-sections (2+ H2s; timestamps pass; the `units:` edge block parses
+  and is acyclic), upstream-coverage (deliverables name every consumed
+  artifact that was produced), claim-sources (an Assumptions & Open
+  Questions section; substantive lines carry `[desc]`, `[scope]`, `[Q<n>]`,
+  `[memory:..]` or `[assumption]`; assumptions only in their section),
+  traceability (shape, closed statuses, no GAP/ORPHAN, a row per upstream
+  id), linter and type-check (the project's own eslint/tsc if installed).
+- **Assumption:** the simpler ports are enough for v1; claim-sources does
+  not resolve tags against the source register or answers, and traceability
+  does not resolve targets in other artifacts.
+
+## D43. Layered rules
+- The import copies AI-DLC's `memory/org.md`, `team.md`, `project.md` to
+  `packs/aidlc/rules/`. Each envelope carries org, then team, then project;
+  a team's own file for a layer (`[rules] org|team|project` in foundry.toml)
+  replaces the pack default for that layer.
+
+## D44. Missing required inputs
+- When an item is created, a required input whose producing step is done
+  but did not name it (in outputs or an artifact path) is recorded as an
+  `input_missing` event. An input from a skipped step is absent by design
+  and not reported.
+
+## D45. packs/aidlc is committed
+- Options: generate it on every machine; commit it.
+- Choice: commit it (1.4 MB, MIT-0 content), so `foundry run packs/aidlc`
+  works without the vendor clone and reviewers can read what agents are
+  told. `foundry import aidlc` regenerates it byte for byte.
