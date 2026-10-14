@@ -1,18 +1,30 @@
 {
-  "name": "foundry",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs"
+  "name": "foundry-factory",
+  "version": "0.1.0",
+  "description": "Foundry: a model-free engine that turns work items into verified, merged commits using approved coding agents over ACP.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "foundry": "dist/cli/main.js"
+  },
+  "files": [
+    "dist/",
+    "formulas/",
+    "examples/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "features": "NODE_OPTIONS='--import tsx' cucumber-js --tags 'not @real-agent'",
+    "features:real": "NODE_OPTIONS='--import tsx' cucumber-js --tags @real-agent",
+    "foundry": "tsx src/cli/main.ts",
+    "prepack": "npm run build"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.8.0",
     "better-sqlite3": "^13.0.3",
@@ -23,7 +35,7 @@
   "devDependencies": {
     "@cucumber/cucumber": "^13.3.0",
     "@types/better-sqlite3": "^9.6.0",
-    "@types/node": "^26.6.5",
+    "@types/node": "^22.19.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.4"
