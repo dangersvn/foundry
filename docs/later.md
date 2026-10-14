@@ -20,5 +20,9 @@ Ideas for later phases, kept out of v0 code.
   `prefer` on quota errors.
 - `foundry attach` / `foundry session replay` over the stored transcripts.
 - `foundry init` to write a starter `foundry.toml`.
-- Redact account details (Claude's `_auth/status_update`) from stored
-  transcripts before any export.
+- Redact account details (Claude's `_auth/status_update` carries the account
+  email) from stored transcripts, on write or before any export.
+- Clean up merged attempts' worktrees and `foundry/WI-n-aN` branches
+  (`foundry gc`); v0 keeps them all.
+- Worktrees outside the repo, so tools that scan the main checkout never
+  see them (decisions D10).

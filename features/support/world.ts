@@ -100,8 +100,10 @@ Before(function (this: FoundryWorld) {
   this.background = [];
 });
 
-After(function (this: FoundryWorld, { result }) {
+// Real-agent repos are kept so their ledger can be read for docs/baseline.md.
+After(function (this: FoundryWorld, { result, pickle }) {
   for (const c of this.background) if (c.exitCode === null) c.kill("SIGKILL");
-  if (result?.status === "PASSED" && this.dir) fs.rmSync(this.dir, { recursive: true, force: true });
-  else if (this.dir) this.attach(`kept for inspection: ${this.repo}`);
+  const real = pickle.tags.some((t) => t.name === "@real-agent");
+  if (result?.status === "PASSED" && !real && this.dir) fs.rmSync(this.dir, { recursive: true, force: true });
+  else if (this.dir) console.log(`\n  repo kept for inspection: ${this.repo}  (try: cd there && foundry status ${this.itemId})`);
 });
