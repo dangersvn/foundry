@@ -7,7 +7,8 @@ checks and audit; the agents supply the thinking.
 
 ## Current build
 
-Build brief: @docs/v0-brief.md
+Build brief: @docs/v1-brief.md
+Earlier phases (done; their scenarios must keep passing): `docs/v0-brief.md`
 Acceptance contract: `features/*.feature`. Never edit these files.
 
 Reference, read when you need detail (they describe the destination, not this
@@ -71,9 +72,11 @@ Adjust the layout if the code argues for it, and log why in
 Keep these working at all times:
 
 - `npm test`: unit tests, no real agents.
-- `npm run features`: every scenario except `@real-agent`.
-- `npm run features:real`: `@real-agent` scenarios; run by hand, needs Kiro
-  or Claude Code signed in and uses quota.
+- `npm run features`: every scenario except `@real-agent` and `@manual`.
+- `npm run features:real`: `@real-agent` scenarios without `@manual`; run by
+  hand, needs Kiro or Claude Code signed in and uses quota.
+- `@manual` scenarios need a person answering; they are covered by the
+  runbook in `docs/manual-runs.md`, not by step definitions.
 - `npm run build`: compiles to `dist/` with the `foundry` command ready.
 
 ## How to work
