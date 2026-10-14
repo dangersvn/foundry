@@ -4,6 +4,8 @@ import { FoundryError } from "../kernel/errors.js";
 
 export const AgentConfig = z.object({
   command: z.array(z.string()).min(1),
+  // How roles are rendered into the agent's native files (see runtime/render.ts).
+  render: z.enum(["kiro", "claude", "none"]).default("none"),
 });
 
 export const Config = z
@@ -13,6 +15,12 @@ export const Config = z
     }),
     dispatch: z.object({ prefer: z.array(z.string()).optional() }).default({}),
     leases: z.object({ ttl_seconds: z.number().positive().default(120) }).default({ ttl_seconds: 120 }),
+    workers: z
+      .object({ count: z.number().int().positive().default(3), stall_seconds: z.number().positive().default(600) })
+      .default({ count: 3, stall_seconds: 600 }),
+    aidlc: z.object({ source: z.string().default("vendor/aidlc-workflows") }).default({ source: "vendor/aidlc-workflows" }),
+    // Layered rules loaded into every envelope, general to specific.
+    rules: z.object({ org: z.string().optional(), team: z.string().optional(), project: z.string().optional() }).default({}),
   })
   .superRefine((cfg, ctx) => {
     for (const name of cfg.dispatch.prefer ?? []) {

@@ -1,0 +1,44 @@
+import { z } from "zod";
+
+// What an agent hands back with `foundry submit --file result.json`. This and
+// `foundry ask` are the only ways agent output enters the kernel.
+export const AgentDecision = z.object({
+  kind: z.enum(["decision", "assumption", "deviation"]),
+  question: z.string().min(1),
+  choice: z.string().min(1),
+  alternatives: z.array(z.string()).default([]),
+  rationale: z.string().min(1),
+  evidence: z.array(z.string()).default([]),
+  affects: z.array(z.string()).default([]),
+  reversible: z.boolean().default(true),
+  supersedes: z.string().optional(),
+});
+export type AgentDecision = z.infer<typeof AgentDecision>;
+
+export const Result = z
+  .object({
+    status: z.enum(["done", "skipped"]),
+    summary: z.string().min(1),
+    reason: z.string().optional(),
+    // Named outputs later steps can read; a list can drive a `per` fan-out.
+    outputs: z.record(z.string(), z.union([z.string(), z.array(z.string())])).default({}),
+    artifacts: z.array(z.object({ path: z.string(), summary: z.string() })).default([]),
+    // Reviewer roles report findings here.
+    findings: z.array(z.string()).default([]),
+    decisions: z.array(AgentDecision),
+  })
+  .superRefine((r, ctx) => {
+    if (r.status === "skipped" && !r.reason) ctx.addIssue({ code: "custom", path: ["reason"], message: "a skipped step needs a reason" });
+  });
+export type Result = z.infer<typeof Result>;
+
+export const Questions = z.object({
+  questions: z
+    .array(z.object({ question: z.string().min(1), options: z.array(z.string().min(1)).min(1), allow_other: z.boolean().default(true) }))
+    .min(1),
+});
+export type Questions = z.infer<typeof Questions>;
+
+export function formatIssues(e: z.ZodError): string {
+  return e.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
+}

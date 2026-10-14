@@ -37,11 +37,11 @@ it("two workers in one process build two items in parallel, each in its own work
   for (const title of ["one", "two"]) {
     await ledger.createRun({ formula: "f", formulaVersion: 1, stepId: "code", title, goal: title, input: "", verify: "true" });
   }
-  const ws = (owner: string): Workspace => ({ repo, stateDir: path.join(repo, ".foundry"), config, ledger, owner, out: () => {} });
+  const ws = (owner: string): Workspace => ({ repo, stateDir: path.join(repo, ".foundry"), config, ledger, owner, out: () => {}, selfCommand: [] });
 
   const results = await Promise.all([workQueue(ws("w1")), workQueue(ws("w2"))]);
 
-  expect(results.flatMap((r) => r.worked.map((o) => o.status))).toEqual(["done", "done"]);
+  expect(results.flatMap((r) => r.worked.map((o) => o.status)).sort()).toEqual(["done", "done", "merge_ready", "merge_ready"]);
   expect(git("rev-list", "--count", "main")).toBe("3");
   expect(fs.readFileSync(path.join(repo, "features/WI-1.txt"), "utf8")).toBe("WI-1\n");
   expect(fs.readFileSync(path.join(repo, "features/WI-2.txt"), "utf8")).toBe("WI-2\n");

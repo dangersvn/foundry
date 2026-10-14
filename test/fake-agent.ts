@@ -11,6 +11,16 @@
 //               "{item}" in a path or content becomes the prompt's item id
 // fake-success  write an unrelated note and claim success without fixing anything
 // escape        try to write outside cwd and to run `git push`, then write inside
+//
+// For multi-step runs the plan scripts each step, attempt by attempt (the last
+// entry repeats); a reviewer session uses the key "<step>:review":
+//   {"steps": {"design": [{"ask": {"question": "...", "options": ["A", "B"]}},
+//                         {"writes": [...], "submit": {...}}]}}
+// An action may write files, ask, note, hand off and submit (an object, or
+// "no-decisions" for a result missing its decisions list). When the envelope
+// asks for a submission and the action names none, a plain "done" is sent.
+// "{item}", "{unit}" and "{attempt}" are filled from the envelope.
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -26,9 +36,16 @@ const { values: opts } = parseArgs({
 });
 const style = opts.style === "claude" ? "claude" : "kiro";
 
-interface Plan {
-  writes: { path: string; content: string }[];
+interface Action {
+  writes?: { path: string; content: string }[];
+  ask?: { question: string; options: string[] };
+  note?: string;
+  handoff?: string;
+  submit?: Record<string, unknown> | "no-decisions" | false;
   message?: string;
+}
+interface Plan extends Action {
+  steps?: Record<string, Action[]>;
 }
 const plan: Plan = opts.plan ? JSON.parse(fs.readFileSync(opts.plan, "utf8")) : { writes: [] };
 
@@ -115,6 +132,45 @@ async function say(sessionId: string, text: string) {
   }
 }
 
+// One scripted action, the way a real agent would do it: tool calls that ask
+// permission first, and `./.foundry/bin/foundry ...` as shell commands.
+async function work(sessionId: string, text: string, fillItem: (s: string) => string) {
+  const field = (k: string) => text.match(new RegExp(`^${k}: (\\S+)`, "m"))?.[1];
+  const stepId = field("step") ?? "";
+  const attempt = Number(field("attempt") ?? "1");
+  const unit = field("unit") ?? "";
+  const review = /^role: \S+ \(reviewing/m.test(text);
+  const fill = (s: string) => fillItem(s).replaceAll("{unit}", unit).replaceAll("{attempt}", String(attempt));
+  const script = plan.steps?.[review ? `${stepId}:review` : stepId];
+  const action: Action = script ? script[Math.min(attempt, script.length) - 1]! : plan.steps ? {} : plan;
+  const foundry = async (...args: string[]) => {
+    const command = ["./.foundry/bin/foundry", ...args.map((a) => `'${a.replaceAll("'", "'\\''")}'`)].join(" ");
+    await toolCall(sessionId, "execute", { command }, () => {
+      try {
+        execFileSync("sh", ["-c", command], { cwd, stdio: "pipe" });
+      } catch {
+        // A rejected submission exits 1; the agent just ends its turn.
+      }
+    });
+  };
+
+  for (const w of action.writes ?? []) await toolCall(sessionId, "edit", { path: fill(w.path) }, () => writeFile(fill(w.path), fill(w.content)));
+  if (action.note) await foundry("note", fill(action.note));
+  if (action.handoff) await foundry("handoff", fill(action.handoff));
+  if (action.ask) {
+    await foundry("ask", "--question", action.ask.question, ...action.ask.options.flatMap((o) => ["--option", o]));
+  } else if (text.includes("foundry submit") && action.submit !== false) {
+    let result: unknown =
+      action.submit && action.submit !== "no-decisions"
+        ? JSON.parse(fill(JSON.stringify(action.submit)))
+        : { status: "done", summary: `${stepId}${unit ? ` ${unit}` : ""} done`, ...(review ? { findings: [] } : {}), decisions: [] };
+    if (action.submit === "no-decisions") result = { status: "done", summary: `${stepId} done` };
+    await toolCall(sessionId, "edit", { path: ".foundry/result.json" }, () => writeFile(".foundry/result.json", JSON.stringify(result)));
+    await foundry("submit", "--file", ".foundry/result.json");
+  }
+  await say(sessionId, fill(action.message ?? "Done."));
+}
+
 async function prompt(sessionId: string, text: string) {
   const item = text.match(/Foundry work item (WI-\d+)/)?.[1] ?? "item";
   const fill = (s: string) => s.replaceAll("{item}", item);
@@ -128,10 +184,7 @@ async function prompt(sessionId: string, text: string) {
     const inside = await toolCall(sessionId, "edit", { path: "inside.txt" }, () => writeFile("inside.txt", "inside\n"));
     await say(sessionId, JSON.stringify({ outside, push, inside }));
   } else {
-    for (const w of plan.writes) {
-      await toolCall(sessionId, "edit", { path: fill(w.path) }, () => writeFile(fill(w.path), fill(w.content)));
-    }
-    await say(sessionId, plan.message ?? "Done.");
+    await work(sessionId, text, fill);
   }
   if (style === "kiro") notify("_kiro.dev/metadata", { sessionId, contextUsagePercentage: 1.2, turnDurationMs: 10 });
   return { stopReason: "end_turn" };

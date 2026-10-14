@@ -25,6 +25,11 @@ const c = {
 };
 const STATUS: Record<string, (s: string) => string> = {
   ready: c.cyan,
+  merging: c.magenta,
+  merge_ready: c.magenta,
+  waiting_input: c.yellow,
+  at_gate: c.yellow,
+  skipped: c.dim,
   running: c.yellow,
   verifying: c.magenta,
   done: c.green,
@@ -50,7 +55,7 @@ export function renderBoard(s: BoardState): string {
   const w = Math.max(60, s.width);
   const lines: string[] = [];
   const rule = (label = "") => c.dim(`── ${label}`.padEnd(w, "─"));
-  const active = (i: Item) => i.status === "running" || i.status === "verifying";
+  const active = (i: Item) => i.status === "running" || i.status === "verifying" || i.status === "merging";
 
   lines.push(
     c.bold(c.cyan(" ▟▙ FOUNDRY ")) + c.dim("software factory") + `   repo ${c.bold(path.basename(s.repo))}   agent ${c.bold(s.agent)}   workers ${s.workers.length}`,
@@ -82,8 +87,12 @@ export function renderBoard(s: BoardState): string {
   const queue = s.items.filter((i) => i.status === "ready");
   const done = s.items.filter((i) => i.status === "done");
   const failed = s.items.filter((i) => i.status === "failed");
+  const waiting = s.items.filter((i) => i.status === "waiting_input" || i.status === "at_gate");
+  const merging = s.items.filter((i) => i.status === "merge_ready");
   lines.push(rule("work items"));
   lines.push(`  ${c.cyan("queued ")} ${queue.length ? queue.map((i) => `${i.id} ${i.title}`).join(c.dim("  ·  ")) : c.dim("(empty)")}`);
+  if (merging.length) lines.push(`  ${c.magenta("merge q")} ${merging.map((i) => i.id).join("  ")}  ${c.dim("(the refinery merges one at a time)")}`);
+  if (waiting.length) lines.push(`  ${c.yellow("for you")} ${waiting.map((i) => `${i.id} ${i.status === "at_gate" ? "at gate" : "has a question"}`).join("  ·  ")}  ${c.dim("(foundry status <id>)")}`);
   lines.push(`  ${c.green("done   ")} ${done.length ? done.map((i) => `${i.id} ✔`).join("  ") : c.dim("(none yet)")}`);
   if (failed.length) lines.push(`  ${c.red("failed ")} ${failed.map((i) => `${i.id} ✘`).join("  ")}  ${c.dim("(foundry status <id> to see why)")}`);
 
@@ -153,7 +162,7 @@ export async function runFactory(
   const refresh = async () => {
     state.items = await ws.ledger.listItems();
     state.latest = new Map();
-    for (const i of state.items.filter((i) => i.status === "running" || i.status === "verifying")) {
+    for (const i of state.items.filter((i) => i.status === "running" || i.status === "verifying" || i.status === "merging")) {
       state.latest.set(i.id, (await ws.ledger.events(i.id)).filter((e) => e.type !== "created"));
     }
     const { stdout } = await exec("git", ["log", "--oneline", "-5", target], { cwd: ws.repo }).catch(() => ({ stdout: "" }));

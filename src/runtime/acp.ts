@@ -26,7 +26,10 @@ export async function runAgent(run: AgentRun): Promise<{ stopReason: string }> {
   const [cmd, ...args] = run.command as [string, ...string[]];
   const transcript = fs.createWriteStream(run.transcriptPath, { flags: "a" });
   const t0 = Date.now();
-  const log = (dir: string, msg: unknown) => transcript.write(JSON.stringify({ t: Date.now() - t0, dir, msg }) + "\n");
+  const log = (dir: string, msg: unknown) => {
+    // The agent may still print while it is being killed after the turn.
+    if (!transcript.writableEnded) transcript.write(JSON.stringify({ t: Date.now() - t0, dir, msg }) + "\n");
+  };
 
   // Its own process group, so npx wrappers and their children die together.
   const child = spawn(cmd, args, { cwd: run.cwd, stdio: ["pipe", "pipe", "pipe"], detached: true });

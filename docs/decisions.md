@@ -207,3 +207,121 @@ Each entry gives what was decided, the options, the choice and the reason.
   lost); a cross-process merge lock is in later.md.
 - Demo workspace: `~/workspaces/test-foundry`, a Node app where each feature
   is its own route file and test file, so parallel items don't conflict.
+
+# Phase 1
+
+## D25. Phase 1 package installed; tag filters
+- The brief, three `features/p1_*.feature` files and the new CLAUDE.md were
+  copied in unchanged. `npm run features` now runs
+  `not @real-agent and not @manual`; `features:real` runs
+  `@real-agent and not @manual`.
+- CLAUDE.md names `docs/v0-brief.md`; the v0 brief is still at the repo root
+  (D1). Left as is: reference files are not to be moved.
+- Phase 0 recheck before starting: `npm run features:real` passed with Kiro
+  and Claude Code on 2026-10-14.
+
+## D26. AI-DLC source pinned at v2.11.0
+- `git clone --depth 1 --branch v2.11.0` of awslabs/aidlc-workflows into
+  `vendor/aidlc-workflows/` (gitignored; tag commit 6a378b5). Path is
+  `[aidlc] source` in foundry.toml. The `~/workspaces/aidlc-claude` copy on
+  this machine is an installed rendering, not the source; not used.
+
+## D27. Pack format is TOML
+- Options: YAML as in the spec; TOML as in v0 formulas.
+- Choice: TOML (`pack.toml`, `formula.toml` with `[[steps]]`,
+  `roles/<name>.toml` + `.md`), so one parser and one style serve v0 and v1.
+  A v0 `[step]` formula loads as a one-step run (`submit = false`: done by
+  the verifier alone, as in Phase 0).
+
+## D28. Steps materialize when their needs finish
+- Options: compile every item up front; create items when a step can start.
+- Choice: `run_steps` records each step as pending/active/done/skipped/
+  failed; `advance` (inside every transaction that finishes an item) starts
+  steps whose needs are done or skipped. A `per` fan-out can only be counted
+  once the upstream step has submitted its list. An empty list skips the step
+  with a kernel `control` decision.
+- **Assumption:** "compile, then run" (spec rule 3) is met by pinning the
+  formula to the run and compiling the step plan (1b dry-run); item counts
+  for fan-outs are known only at run time.
+
+## D29. Agent commands find their item through the worktree
+- `.foundry/item.json` (item, attempt, ledger path) and a
+  `./.foundry/bin/foundry` wrapper are written into the worktree's excluded
+  `.foundry/`. The wrapper is relative, so the permission policy (which
+  denies absolute paths outside the worktree) lets it run.
+- `submit`, `note`, `handoff`, `ask` only add rows (submissions, notes,
+  questions) and events; the worker decides status after the turn. A
+  command for a stale attempt is refused.
+
+## D30. Verifier failures retry (changes D13)
+- Options: fail at once (Phase 0); retry with the output in history.
+- Choice: retry up to `max_attempts` (default 3), the verifier output and
+  any handoff in the next envelope's history, plus a `control` decision. This
+  also applies to v0 one-step formulas, so the Phase 0 "cannot fake
+  completion" item now fails after 3 attempts instead of 1.
+- Rejections at a gate and answers start a new attempt too, but never fail
+  the item.
+
+## D31. Statuses, merge queue and refinery
+- New statuses: `waiting_input`, `at_gate`, `merge_ready`, `merging`,
+  `skipped`. A verified change goes to `merge_ready` (or `at_gate` first).
+- The refinery claims a `merge_ready` item only while no item is `merging`,
+  checked in the same `BEGIN IMMEDIATE` transaction, so merges are serial
+  across every process (replaces D24's in-process lock). It rebases, runs the
+  formula's `verify` (or the step's), and fast-forwards; a conflict or
+  failure retries the item with the error in its history. When the rebase
+  was a no-op and the same command already passed on that commit, the full
+  verify is not run twice.
+- An expired lease while `merging` returns the item to `merge_ready`.
+
+## D32. Review step
+- After a step passes its verifier, a second session runs in the same
+  worktree with the reviewer role (read and shell tools only). It submits
+  `findings`, stored as review notes and shown at the gate. Afterwards the
+  worktree is reset to the step's commit, so a reviewer cannot change it.
+  Findings are advisory in v1: they never block.
+
+## D33. Questions and gates
+- `foundry ask` stores structured questions (options plus "other" unless
+  `--no-other`); the item goes to `waiting_input` when the turn ends and the
+  agent process exits. When every question of the item is answered it goes
+  back to ready with the next attempt. Each answer is a `decision` record
+  with the person as actor.
+- People are `person:<git user.name>` (else `$USER`).
+- `foundry approve` moves `at_gate` to `merge_ready`; `foundry reject
+  --comment` (required) adds a rejection note and starts a new attempt.
+
+## D34. Decision log
+- `decisions` table, ids `DEC-n`, kinds decision/assumption/deviation (from
+  `submit`, actor `<role>@<agent>`) and control (kernel only: retries, empty
+  fan-outs). Never updated; `supersedes` names the older record and
+  "superseded" is derived. A skip is recorded as a decision with the reason.
+- The envelope's history carries the non-control decisions of the item's
+  inputs.
+
+## D35. Role rendering
+- `render = "kiro" | "claude" | "none"` per agent in foundry.toml (agent
+  code stays in `src/runtime/render.ts`).
+- Kiro: `.kiro/agents/foundry-<role>.json` with the prompt, tools from
+  `tools_allowed`, `allowedTools` limited to reads (so writes and shell still
+  come to Foundry's policy), knowledge as `resources`; launched with
+  `--agent foundry-<role>`.
+- Claude Code: `CLAUDE.local.md` with the prompt and `@` knowledge links,
+  and `.claude/settings.local.json` denying tools the role may not use.
+- Knowledge files are copied to the worktree's `.foundry/pack/`; rendered
+  files are added to `.git/info/exclude`.
+- **Assumption:** target repos do not track `CLAUDE.local.md`,
+  `.claude/settings.local.json` or `.kiro/agents/foundry-*.json`.
+
+## D36. Workers, patrol, `foundry run`
+- `[workers] count` (default 3) worker loops per process; `--workers`
+  overrides. Each loop does patrol, then merge-queue work, then ready items.
+- Patrol flags an item once when it has had no event for
+  `[workers] stall_seconds` (600).
+- `foundry run` works only its own run and exits when nothing in it is left
+  for a worker; it prints each open question and gate with the command to
+  resolve it. Exit 1 only if an item failed.
+
+## D37. Envelopes are kept
+- Every session's envelope is written to `.foundry/envelopes/WI-n-aN.md`
+  and recorded as an artifact, so what an agent was told is auditable.

@@ -2,3 +2,4 @@ node_modules/
 dist/
 .foundry/
 *.db
+vendor/aidlc-workflows/

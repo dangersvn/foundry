@@ -38,14 +38,17 @@ export async function targetBranch(repo: string): Promise<string> {
   return current;
 }
 
-// Keep Foundry's state dir out of `git status` without touching tracked files.
-export async function excludeStateDir(repo: string): Promise<void> {
+// Keep Foundry's state dir (and any extra patterns, such as rendered role
+// files) out of `git status` and commits without touching tracked files.
+export async function excludeStateDir(repo: string, extra: string[] = []): Promise<void> {
   const common = path.resolve(repo, await git(repo, ["rev-parse", "--git-common-dir"]));
   const exclude = path.join(common, "info", "exclude");
   const current = fs.existsSync(exclude) ? fs.readFileSync(exclude, "utf8") : "";
-  if (!current.split("\n").includes("/.foundry/")) {
+  const have = new Set(current.split("\n"));
+  const missing = ["/.foundry/", ...extra].filter((p) => !have.has(p));
+  if (missing.length) {
     fs.mkdirSync(path.dirname(exclude), { recursive: true });
-    fs.appendFileSync(exclude, `${current && !current.endsWith("\n") ? "\n" : ""}/.foundry/\n`);
+    fs.appendFileSync(exclude, `${current && !current.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
   }
 }
 
@@ -98,6 +101,27 @@ export async function rebaseOnto(wt: string, target: string): Promise<string> {
     }
   }
   return git(wt, ["rev-parse", "HEAD"]);
+}
+
+// Undo anything left in the worktree after `commit` (e.g. a reviewer's edits).
+export async function resetWorktree(wt: string): Promise<void> {
+  await git(wt, ["reset", "-q", "--hard", "HEAD"]);
+  await git(wt, ["clean", "-q", "-fd"]);
+}
+
+export async function headSha(cwd: string, ref = "HEAD"): Promise<string> {
+  return git(cwd, ["rev-parse", ref]);
+}
+
+export async function isAncestor(cwd: string, a: string, b: string): Promise<boolean> {
+  return ok(cwd, ["merge-base", "--is-ancestor", a, b]);
+}
+
+// The commit that last changed `file:line` on `ref`, and its message.
+export async function blameLine(repo: string, ref: string, file: string, line: number): Promise<{ sha: string; message: string }> {
+  const out = await git(repo, ["blame", "-L", `${line},${line}`, "--porcelain", ref, "--", file], `check that ${file} has a line ${line} on ${ref}`);
+  const sha = out.split(" ")[0]!;
+  return { sha, message: await git(repo, ["log", "-1", "--format=%B", sha]) };
 }
 
 export async function fastForward(repo: string, target: string, sha: string): Promise<void> {

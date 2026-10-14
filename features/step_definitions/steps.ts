@@ -90,11 +90,11 @@ Given("one ready item", async function (this: FoundryWorld) {
     const { itemId } = await l.createRun({
       formula: f.formula,
       formulaVersion: f.version,
-      stepId: f.step.id,
+      stepId: f.steps[0]!.id,
       title: f.title!,
-      goal: f.step.goal,
+      goal: f.steps[0]!.goal,
       input: "",
-      verify: f.step.verify,
+      verify: f.steps[0]!.verify!,
     });
     return itemId;
   });

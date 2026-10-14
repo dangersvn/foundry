@@ -55,7 +55,8 @@ id = "code"
 goal = "Add GET /health"
 verify = "npm test"
 `);
-    expect(f.step.verify).toBe("npm test");
+    expect(f.steps[0]?.verify).toBe("npm test");
+    expect(f.oneStep).toBe(true);
     expect(f.title).toBe("add a health endpoint with a test");
   });
 
