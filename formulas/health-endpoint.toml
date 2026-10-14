@@ -1,0 +1,14 @@
+# A one-step formula: the agent works toward the goal in its own worktree,
+# then Foundry runs `verify` there. Only a passing verify merges.
+formula = "health-endpoint"
+version = 1
+title = "add a health endpoint with a test"
+
+[step]
+id = "code"
+goal = """
+Add a GET /health HTTP endpoint that responds with status 200 and the JSON
+body {"status":"ok"}. Add an automated test for it to the project's existing
+test suite. Follow the project's existing structure and conventions.
+"""
+verify = "npm test"

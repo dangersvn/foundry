@@ -1,0 +1,13 @@
+{
+  "writes": [
+    {
+      "path": "src/app.js",
+      "content": "import http from \"node:http\";\n\nexport function handle(req, res) {\n  if (req.method === \"GET\" && req.url === \"/health\") {\n    res.writeHead(200, { \"content-type\": \"application/json\" });\n    res.end(JSON.stringify({ status: \"ok\" }));\n    return;\n  }\n  if (req.method === \"GET\" && req.url === \"/\") {\n    res.writeHead(200, { \"content-type\": \"text/plain\" });\n    res.end(\"hello\\n\");\n    return;\n  }\n  res.writeHead(404, { \"content-type\": \"text/plain\" });\n  res.end(\"not found\\n\");\n}\n\nexport const createServer = () => http.createServer(handle);\n"
+    },
+    {
+      "path": "test/health.test.js",
+      "content": "import assert from \"node:assert/strict\";\nimport { after, before, test } from \"node:test\";\nimport { createServer } from \"../src/app.js\";\n\nlet server;\nlet base;\nbefore(async () => {\n  server = createServer();\n  await new Promise((resolve) => server.listen(0, resolve));\n  base = `http://127.0.0.1:${server.address().port}`;\n});\nafter(() => server.close());\n\ntest(\"GET /health is ok\", async () => {\n  const res = await fetch(`${base}/health`);\n  assert.equal(res.status, 200);\n  assert.deepEqual(await res.json(), { status: \"ok\" });\n});\n"
+    }
+  ],
+  "message": "Added GET /health and a test for it."
+}

@@ -55,6 +55,7 @@ export async function runAgent(run: AgentRun): Promise<{ stopReason: string }> {
     } catch {}
   };
   run.signal?.addEventListener("abort", kill);
+  process.on("exit", kill);
 
   // Record each line in both directions while the SDK reads and writes them.
   lineTap(child.stdout, (line) => log("in", tryParse(line)));
@@ -183,6 +184,7 @@ export async function runAgent(run: AgentRun): Promise<{ stopReason: string }> {
     return { stopReason: result.stopReason };
   } finally {
     run.signal?.removeEventListener("abort", kill);
+    process.off("exit", kill);
     child.stdin.end();
     kill();
     await new Promise((r) => transcript.end(r));
