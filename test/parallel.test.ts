@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { workQueue, type Workspace } from "../src/kernel/dispatcher.js";
 import { Ledger } from "../src/kernel/ledger.js";
 import { parseConfig } from "../src/schemas/config.js";
+import { Step } from "../src/schemas/formula.js";
 import { fakeAgentCommand } from "./helpers.js";
 
 let repo: string;
@@ -52,5 +53,25 @@ it("two workers in one process build two items in parallel, each in its own work
   const firstMerge = Math.min(await ts("WI-1", "merged"), await ts("WI-2", "merged"));
   expect(await ts("WI-1", "agent_started")).toBeLessThan(firstMerge);
   expect(await ts("WI-2", "agent_started")).toBeLessThan(firstMerge);
+  fs.rmSync(plan);
+});
+
+it("a docs-only change merges without the full verify; a code change still needs it", async () => {
+  const plan = path.join(repo, "..", `${path.basename(repo)}-plan2.json`);
+  fs.writeFileSync(plan, JSON.stringify({ writes: [{ path: "{item}", content: "x\n" }] }));
+  // The full verify always fails, like a bugfix repo's red suite before the fix.
+  const config = parseConfig(`[agents.fake]\ncommand = ${JSON.stringify(fakeAgentCommand("--plan", plan))}\n[project]\ntest_command = "false"\n`);
+  const formula = (file: string) =>
+    ({ formula: "f", version: 1, oneStep: false, verify: "false", steps: [Step.parse({ id: "s", goal: `write ${file}`, submit: false, max_attempts: 1 })] }) as never;
+  fs.writeFileSync(plan, JSON.stringify({ writes: [{ path: "aidlc-docs/notes.md", content: "# notes\n" }] }));
+  await ledger.startRun({ formula: formula("docs"), title: "docs", input: "", packDir: null });
+  const ws: Workspace = { repo, stateDir: path.join(repo, ".foundry"), config, ledger, owner: "w", out: () => {}, selfCommand: [] };
+  await workQueue(ws);
+  expect((await ledger.getItem("WI-1"))?.status).toBe("done");
+  fs.writeFileSync(plan, JSON.stringify({ writes: [{ path: "src/code.js", content: "x\n" }] }));
+  await ledger.startRun({ formula: formula("code"), title: "code", input: "", packDir: null });
+  await workQueue(ws);
+  expect((await ledger.getItem("WI-2"))?.status).toBe("failed");
+  expect((await ledger.events("WI-1")).some((e) => e.type === "merge_verify_skipped")).toBe(true);
   fs.rmSync(plan);
 });

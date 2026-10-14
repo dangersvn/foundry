@@ -241,7 +241,14 @@ async function cmdStatus(args: string[]): Promise<number> {
         lines.push(`  review:    ${reviewed.payload.reviewer} (advisory), ${findings.length} findings`, ...findings.map((f) => `    - ${f}`));
       }
       const r = item.result_json ? JSON.parse(item.result_json) : null;
-      if (r) lines.push(`  result:    ${r.summary}`);
+      if (r) {
+        lines.push(`  result:    ${r.summary}`);
+        for (const [k, v] of Object.entries(r.outputs ?? {})) lines.push(`  output:    ${k} = ${JSON.stringify(v)}`);
+        for (const a of r.artifacts ?? []) lines.push(`  artifact:  ${a.path} — ${a.summary}`);
+        for (const d of r.decisions ?? []) lines.push(`  decision:  (${d.kind}) ${d.question} -> ${d.choice}`);
+      }
+      const checks = (await ws.ledger.notes(item.id)).filter((n) => n.kind === "check" && n.attempt === item.attempt);
+      for (const c of checks) lines.push(`  check:     ${c.author} (advisory): ${c.body}`);
       lines.push(`  next:      foundry approve ${item.id}   or   foundry reject ${item.id} --comment "..."`);
     }
     const failed = of("failed").at(-1);
@@ -265,6 +272,17 @@ async function statusRun(ws: Workspace, runId: string): Promise<number> {
   const items = await ws.ledger.listItems(runId);
   const order = (JSON.parse(run.formula_json ?? '{"steps":[]}') as { steps: { id: string }[] }).steps.map((s) => s.id);
   const steps = (await ws.ledger.runSteps(runId)).sort((a, b) => order.indexOf(a.step_id) - order.indexOf(b.step_id));
+  const runEvents = await ws.ledger.runEvents(runId);
+  const count = (t: string) => runEvents.filter((e) => e.type === t).length;
+  const started = runEvents.find((e) => e.type === "run_started")?.ts;
+  const ended = runEvents.find((e) => e.type === "run_done" || e.type === "run_failed")?.ts;
+  const questions = runEvents.filter((e) => e.type === "asked").reduce((n, e) => n + (e.payload.questions as unknown[]).length, 0);
+  ws.out(
+    `  metrics: ${questions} questions, ${count("at_gate")} gates (${count("approved")} approved, ${count("rejected")} rejected), ` +
+      `${count("agent_started") + count("review_agent_started")} agent sessions, ${count("tool_call") + count("review_tool_call")} tool calls, ` +
+      `${count("permission") + count("review_permission")} permission requests, ${count("retry")} retries` +
+      (started ? `, ${(((ended ?? Date.now()) - started) / 60000).toFixed(1)} min${ended ? "" : " so far"}` : ""),
+  );
   for (const s of steps) {
     ws.out(`  step ${s.step_id.padEnd(24)} ${s.status}`);
     for (const i of items.filter((i) => i.step_id === s.step_id)) ws.out(`    ${i.id.padEnd(6)} ${i.status.replace("_", " ").padEnd(14)} attempt ${i.attempt}  ${i.title}`);
@@ -369,9 +387,18 @@ async function cmdWhy(args: string[]): Promise<number> {
     const inputs = JSON.parse(item.inputs_json ?? "[]") as InputRef[];
     ws.out(`  inputs:    ${inputs.length ? "" : "none"}`);
     for (const i of inputs) ws.out(`    - ${i.step} ${i.item} [${i.status}]: ${i.summary}`);
-    const decisions = [...(await ws.ledger.decisions({ itemId })), ...(await Promise.all(inputs.map((i) => ws.ledger.decisions({ itemId: i.item })))).flat()];
+    // Decisions of this item and of everything upstream of it, nearest first.
+    const chain: string[] = [];
+    for (const queue = [itemId]; queue.length; ) {
+      const id = queue.shift()!;
+      if (chain.includes(id)) continue;
+      chain.push(id);
+      const it = await ws.ledger.getItem(id);
+      for (const i of JSON.parse(it?.inputs_json ?? "[]") as InputRef[]) queue.push(i.item);
+    }
+    const decisions = (await Promise.all(chain.map((id) => ws.ledger.decisions({ itemId: id })))).flat();
     ws.out(`  decisions: ${decisions.length ? "" : "none"}`);
-    for (const d of decisions) ws.out(`    - ${d.id} ${d.kind} by ${d.actor} (${d.item_id}): ${d.question} -> ${d.choice}`);
+    for (const d of decisions) ws.out(`    - ${d.id} ${d.kind} by ${d.actor} (${d.item_id} ${d.step_id}): ${d.question} -> ${d.choice}`);
     return 0;
   } finally {
     await ws.ledger.close();

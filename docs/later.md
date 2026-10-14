@@ -30,3 +30,12 @@ Ideas for later phases, kept out of v0 code.
   rebase), so separate `foundry` processes can merge at the same instant.
 - Factory chat that plans: hand a request to an agent that splits it into
   several items (Phase 3 Mayor), instead of one line = one item.
+- Retry a failed run from its failed step instead of starting a new run
+  (`foundry retry WI-n`); v1 fails the run.
+- Show questions and gates on the factory board with keys to answer and
+  approve from it.
+- Resolve claim-sources tags against the source register and answers, and
+  traceability targets against other artifacts (decisions D42).
+- AI-DLC protocols (`core/aidlc-common/protocols/`) are not imported; parts
+  of them (question-file format, completion message) could become envelope
+  guidance if agents need it.

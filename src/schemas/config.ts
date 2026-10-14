@@ -21,7 +21,11 @@ export const Config = z
     aidlc: z.object({ source: z.string().default("vendor/aidlc-workflows") }).default({ source: "vendor/aidlc-workflows" }),
     // The project's own test command: the refinery runs it on every merge
     // when the formula has no verify of its own.
-    project: z.object({ test_command: z.string().optional() }).default({}),
+    // A merge that only touches docs_paths skips the full verify (documents
+    // cannot break the test suite, and a bugfix starts from a red one).
+    project: z
+      .object({ test_command: z.string().optional(), docs_paths: z.array(z.string()).default(["aidlc-docs/", "aidlc/"]) })
+      .default({ docs_paths: ["aidlc-docs/", "aidlc/"] }),
     // Layered rules loaded into every envelope, general to specific.
     rules: z.object({ org: z.string().optional(), team: z.string().optional(), project: z.string().optional() }).default({}),
   })

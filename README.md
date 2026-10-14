@@ -97,6 +97,38 @@ It usually takes one to three minutes, depending on the agent.
 
 Exit code is 0 when the item (or every worked item) is done, 1 otherwise.
 
+## Multi-step runs and AI-DLC (Phase 1)
+
+A **pack** is a folder with `pack.toml`, a `formula.toml` of `[[steps]]`,
+roles (`roles/<name>.toml` + prompt) and step instructions. Steps have a
+role, `needs`, `per` (fan out over a list an earlier step submitted),
+`verify`, `gate = "human"`, `review` (an advisory reviewer role) and
+`max_attempts`. Agents talk to Foundry from their worktree with
+`./.foundry/bin/foundry submit | ask | note | handoff`; you answer with:
+
+```sh
+foundry status RUN-1                       # every step and item, plus run metrics
+foundry answer WI-3 "SQLite"               # answer a question; then foundry work
+foundry approve WI-4                       # approve a gate; it merges on the next foundry work
+foundry reject WI-4 --comment "missing error cases"
+foundry decisions RUN-1                    # the decision log
+foundry why src/app.js:12                  # commit, item, decisions, inputs and run behind a line
+```
+
+AI-DLC v2.11.0 is imported as `packs/aidlc` (30 steps plus run setup, 14
+roles, 11 profiles, 6 verifiers):
+
+```sh
+foundry plan packs/aidlc --profile bugfix --dry-run      # 6 stage steps
+foundry run packs/aidlc --profile bugfix --input "GET /sum adds strings instead of numbers"
+foundry import aidlc                                      # regenerate from vendor/aidlc-workflows
+```
+
+Add `render = "kiro"` or `render = "claude"` to an agent in `foundry.toml`
+so roles render into the agent's own files, and `[project] test_command =
+"npm test"` so every code merge runs your tests. The full walkthrough is
+`docs/manual-runs.md`.
+
 ## Formulas
 
 A v0 formula has one step: a goal for the agent and a verify command that

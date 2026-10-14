@@ -419,3 +419,31 @@ Each entry gives what was decided, the options, the choice and the reason.
 - Choice: commit it (1.4 MB, MIT-0 content), so `foundry run packs/aidlc`
   works without the vendor clone and reviewers can read what agents are
   told. `foundry import aidlc` regenerates it byte for byte.
+
+## D46. Docs-only merges skip the full verify
+- What: the bugfix run starts with a failing test on main, so a merge
+  verify of `npm test` would block every documentation step before the fix.
+- Choice: `[project] docs_paths` (default `aidlc-docs/`, `aidlc/`); a change
+  that only touches those paths merges without the full verify (recorded as
+  `merge_verify_skipped`). Any other change is always verified.
+- **Assumption:** documents under those paths cannot break the test suite.
+
+## D47. Real-agent check of the v1 protocol (not the 1c runs)
+- Ran a one-step test pack (not AI-DLC) once with Kiro (`render = "kiro"`)
+  and once with Claude Code (`render = "claude"`): both wrote
+  `.foundry/result.json`, ran `./.foundry/bin/foundry submit`, and stopped at
+  the gate; Kiro's item merged after approval. Rendered role files stayed
+  out of the commit.
+- Observed: Claude wrote `.foundry/result.json` without a permission request
+  (inside the worktree, so allowed anyway). This confirms D7: agents' own
+  settings can let writes through without asking Foundry.
+
+## D48. `foundry why` walks the whole input chain
+- It lists the decisions of the item and of every item upstream of it, so
+  answers given at an early step (e.g. requirements-analysis) show up for a
+  line written by code-generation.
+
+## D49. Run metrics for the baseline
+- `foundry status RUN-n` prints questions, gates (approved, rejected), agent
+  sessions (including reviews), tool calls, permission requests, retries and
+  minutes from run start to done, which is what the brief asks to record.

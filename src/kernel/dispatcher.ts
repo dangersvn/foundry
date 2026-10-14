@@ -373,7 +373,11 @@ export async function mergeItem(ws: Workspace, itemId: string): Promise<Outcome>
     }
     const verified = (await ledger.events(itemId)).filter((e) => e.type === "verified").at(-1);
     const alreadyVerified = verified?.payload.sha === head && verified?.payload.command === fullVerify;
-    if (fullVerify && !alreadyVerified) {
+    const changed = await git.changedFiles(item.worktree, target, head);
+    const docsOnly = changed.length > 0 && changed.every((f) => ws.config.project.docs_paths.some((p) => f.startsWith(p)));
+    if (fullVerify && docsOnly) {
+      await ledger.record(itemId, owner, "merge_verify_skipped", { reason: "the change only touches documentation paths", files: changed.length });
+    } else if (fullVerify && !alreadyVerified) {
       out(`${itemId} merge verify: ${fullVerify}`);
       const r = await runVerify(item.worktree, fullVerify);
       if (!r.passed) {

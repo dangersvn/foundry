@@ -29,6 +29,7 @@ export function summarize(e: LedgerEvent): string {
     case "skipped": return String(p.reason);
     case "merge_queued": return `commit ${String(p.commit).slice(0, 12)}`;
     case "merge_started": return "";
+    case "merge_verify_skipped": return `${p.reason} (${p.files} files)`;
     case "merge_verified": return `\`${p.command}\` passed on top of main`;
     case "completed": return "no file changes to merge";
     case "note": case "handoff": case "design": return String(p.body);
