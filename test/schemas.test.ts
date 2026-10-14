@@ -63,3 +63,29 @@ verify = "npm test"
     expect(() => parseFormula(`formula="x"\nversion=1\n[step]\nid="a"\ngoal="g"\n`)).toThrow(/verify/);
   });
 });
+
+describe("factory board", () => {
+  it("draws main, one lane per worker with its worktree, the queue and the input line", async () => {
+    const { renderBoard } = await import("../src/cli/factory.js");
+    const item = (id: string, status: string, owner: string | null, title: string) =>
+      ({ id, status, lease_owner: owner, title, worktree: `/r/.foundry/worktrees/${id}-a1`, branch: `foundry/${id}-a1` }) as never;
+    const screen = renderBoard({
+      repo: "/r",
+      agent: "kiro",
+      target: "main",
+      workers: [{ id: "w1" }, { id: "w2" }],
+      items: [item("WI-1", "running", "w1", "add /health"), item("WI-2", "verifying", "w2", "add /time"), item("WI-3", "ready", null, "add /echo")],
+      latest: new Map(),
+      mainLog: ["abc1234 demo app"],
+      activity: [],
+      input: "add a /quote route",
+      notice: "",
+      width: 120,
+    }).replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "");
+    expect(screen).toContain("worker 1  WI-1 [running]  add /health");
+    expect(screen).toContain("worktree .foundry/worktrees/WI-1-a1");
+    expect(screen).toContain("worker 2  WI-2 [verifying]  add /time");
+    expect(screen).toMatch(/queued\s+WI-3 add \/echo/);
+    expect(screen).toContain("factory › add a /quote route");
+  });
+});

@@ -24,6 +24,14 @@ export interface Workspace {
 
 export type Outcome = { status: "done"; commit: string } | { status: "failed" | "ready"; error: FoundryError };
 
+// One git-mutating section at a time within this process.
+let gitChain: Promise<unknown> = Promise.resolve();
+function serialized<T>(fn: () => Promise<T>): Promise<T> {
+  const run = gitChain.then(fn, fn);
+  gitChain = run.catch(() => {});
+  return run;
+}
+
 export const workerId = () => `${os.hostname()}:${process.pid}`;
 
 export function buildPrompt(item: Item, wt: git.Worktree): string {
@@ -72,7 +80,7 @@ export async function processItem(ws: Workspace, itemId: string): Promise<Outcom
     }
 
     const agent = pickAgent(ws.config);
-    const wt = await git.createWorktree(ws.repo, itemId, item.attempt);
+    const wt = await serialized(() => git.createWorktree(ws.repo, itemId, item.attempt));
     await ledger.record(itemId, owner, "worktree_created", { path: wt.path, branch: wt.branch, base: wt.base }, {
       worktree: wt.path,
       branch: wt.branch,
@@ -111,32 +119,37 @@ export async function processItem(ws: Workspace, itemId: string): Promise<Outcom
     if (!commit) {
       throw new FoundryError("agent", `the agent ended its turn without changing any files in ${wt.path}`, `foundry log ${itemId}`);
     }
-    const head = await git.rebaseOnto(wt.path, target);
-    out(`${itemId} verifying: ${item.verify}`);
-    const result = await runVerify(wt.path, item.verify);
-    const logPath = path.join(ws.stateDir, "logs", `${itemId}-a${item.attempt}-verify.log`);
-    fs.mkdirSync(path.dirname(logPath), { recursive: true });
-    fs.writeFileSync(logPath, result.output);
-    await ledger.addArtifact(itemId, "verify_log", logPath);
-    checkLease();
-    if (!result.passed) {
-      throw Object.assign(
-        new FoundryError(
-          "verifier",
-          `\`${item.verify}\` failed (exit ${result.exitCode}) in ${wt.path}`,
-          `read the output with \`foundry status ${itemId}\` (full log: ${path.relative(ws.repo, logPath)}); the worktree is kept for you to inspect`,
-        ),
-        { detail: { exitCode: result.exitCode, output: tail(result.output), log: logPath } },
-      );
-    }
-    await ledger.record(itemId, owner, "verified", {
-      command: item.verify,
-      exitCode: result.exitCode,
-      durationMs: result.durationMs,
-      output: tail(result.output, 1000),
-    });
+    // Rebase, verify and fast-forward one item at a time, so parallel
+    // workers never race to move the target branch.
+    const head = await serialized(async () => {
+      const head = await git.rebaseOnto(wt.path, target);
+      out(`${itemId} verifying: ${item.verify}`);
+      const result = await runVerify(wt.path, item.verify);
+      const logPath = path.join(ws.stateDir, "logs", `${itemId}-a${item.attempt}-verify.log`);
+      fs.mkdirSync(path.dirname(logPath), { recursive: true });
+      fs.writeFileSync(logPath, result.output);
+      await ledger.addArtifact(itemId, "verify_log", logPath);
+      checkLease();
+      if (!result.passed) {
+        throw Object.assign(
+          new FoundryError(
+            "verifier",
+            `\`${item.verify}\` failed (exit ${result.exitCode}) in ${wt.path}`,
+            `read the output with \`foundry status ${itemId}\` (full log: ${path.relative(ws.repo, logPath)}); the worktree is kept for you to inspect`,
+          ),
+          { detail: { exitCode: result.exitCode, output: tail(result.output), log: logPath } },
+        );
+      }
+      await ledger.record(itemId, owner, "verified", {
+        command: item.verify,
+        exitCode: result.exitCode,
+        durationMs: result.durationMs,
+        output: tail(result.output, 1000),
+      });
 
-    await git.fastForward(ws.repo, target, head);
+      await git.fastForward(ws.repo, target, head);
+      return head;
+    });
     await ledger.transition(itemId, owner, "verifying", "done", "merged", { commit: head, target, branch: wt.branch });
     out(`${itemId} done: merged ${head.slice(0, 7)} into ${target}`);
     return { status: "done", commit: head };
@@ -181,7 +194,8 @@ function describeEvent(itemId: string, e: AgentEvent): string {
 
 // Claims and works ready items until none are left. Waits while other
 // workers hold live leases, and recovers items whose leases expired.
-export async function workQueue(ws: Workspace): Promise<{ worked: Outcome[]; fatal?: FoundryError }> {
+// With `watch`, keeps polling for new ready items instead of exiting.
+export async function workQueue(ws: Workspace, opts: { watch?: boolean } = {}): Promise<{ worked: Outcome[]; fatal?: FoundryError }> {
   const worked: Outcome[] = [];
   for (;;) {
     for (const id of await ws.ledger.recoverExpired()) ws.out(`${id} lease expired; back to ready`);
@@ -195,7 +209,7 @@ export async function workQueue(ws: Workspace): Promise<{ worked: Outcome[]; fat
       if (outcome.status === "ready") return { worked, fatal: outcome.error };
       continue;
     }
-    if (!(await ws.ledger.hasActiveItems())) return { worked };
-    await new Promise((r) => setTimeout(r, 500));
+    if (!opts.watch && !(await ws.ledger.hasActiveItems())) return { worked };
+    await new Promise((r) => setTimeout(r, opts.watch ? 1000 : 500));
   }
 }

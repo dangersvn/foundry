@@ -26,3 +26,7 @@ Ideas for later phases, kept out of v0 code.
   (`foundry gc`); v0 keeps them all.
 - Worktrees outside the repo, so tools that scan the main checkout never
   see them (decisions D10).
+- Cross-process merge lock (a ledger row or `git update-ref` retry with
+  rebase), so separate `foundry` processes can merge at the same instant.
+- Factory chat that plans: hand a request to an agent that splits it into
+  several items (Phase 3 Mayor), instead of one line = one item.

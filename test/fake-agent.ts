@@ -7,7 +7,8 @@
 //   fake-agent.ts [--style kiro|claude] [--mode work|fake-success|escape]
 //                 [--plan plan.json] [--delay-ms N]
 //
-// work          apply the plan's writes ({writes: [{path, content}], message})
+// work          apply the plan's writes ({writes: [{path, content}], message});
+//               "{item}" in a path or content becomes the prompt's item id
 // fake-success  write an unrelated note and claim success without fixing anything
 // escape        try to write outside cwd and to run `git push`, then write inside
 import { randomUUID } from "node:crypto";
@@ -114,7 +115,9 @@ async function say(sessionId: string, text: string) {
   }
 }
 
-async function prompt(sessionId: string) {
+async function prompt(sessionId: string, text: string) {
+  const item = text.match(/Foundry work item (WI-\d+)/)?.[1] ?? "item";
+  const fill = (s: string) => s.replaceAll("{item}", item);
   await sleep(Number(opts["delay-ms"]));
   if (opts.mode === "fake-success") {
     await toolCall(sessionId, "edit", { path: "NOTES.md" }, () => writeFile("NOTES.md", "Fixed the failing test.\n"));
@@ -126,7 +129,7 @@ async function prompt(sessionId: string) {
     await say(sessionId, JSON.stringify({ outside, push, inside }));
   } else {
     for (const w of plan.writes) {
-      await toolCall(sessionId, "edit", { path: w.path }, () => writeFile(w.path, w.content));
+      await toolCall(sessionId, "edit", { path: fill(w.path) }, () => writeFile(fill(w.path), fill(w.content)));
     }
     await say(sessionId, plan.message ?? "Done.");
   }
@@ -156,7 +159,10 @@ async function handle(msg: Json) {
     cwd = params.cwd as string;
     return send({ id, result: { sessionId: randomUUID() } });
   }
-  if (method === "session/prompt") return send({ id, result: await prompt(params.sessionId as string) });
+  if (method === "session/prompt") {
+    const text = (params.prompt as { type: string; text?: string }[]).map((b) => b.text ?? "").join("\n");
+    return send({ id, result: await prompt(params.sessionId as string, text) });
+  }
   send({ id, error: { code: -32601, message: `fake agent does not support ${method}` } });
 }
 

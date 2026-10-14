@@ -182,3 +182,28 @@ Each entry gives what was decided, the options, the choice and the reason.
   with both agents and to fill in `docs/baseline.md`. Cost of the scenario
   runs: about 0.7 Kiro credits (two runs) and USD 0.16 of Claude usage, plus
   the spike's five short sessions.
+
+## D24. Factory board, parallel workers and `foundry add` (asked for after v0)
+- What: the user asked for a demo workspace where two features build at
+  once in separate worktrees, shown live in the terminal, with a way to
+  "chat" more work in. That is beyond the v0 brief (one item per process).
+- Choice, kept small:
+  - `foundry work --workers N` runs N worker loops in one process, each with
+    its own lease owner (`host:pid:wN`). Creating worktrees and the
+    rebase-verify-fast-forward step run one at a time in the process, so
+    workers never race to move main; agents still run in parallel.
+  - `foundry add <formula> --input` queues an item without working it.
+  - `foundry factory <formula> [--workers N]` draws the board from the
+    ledger and git every 0.7 s (ANSI only, no UI library) and turns each
+    line typed at its prompt into a work item with that formula. Workers
+    there keep waiting for new items instead of exiting.
+  - A formula without `title` uses the request as the item's title.
+- "Chat" is a queue, not a conversation: Foundry makes no LLM calls (rule 1),
+  so it never replies or plans. A planning chat is the Phase 3 Mayor
+  (`foundry mcp` in your own Kiro/Claude session).
+- **Assumption:** in-process merge serialization is enough for the demo.
+  Two separate `foundry` processes moving main at the same moment can still
+  make one item fail at the git layer (the ref update refuses, nothing is
+  lost); a cross-process merge lock is in later.md.
+- Demo workspace: `~/workspaces/test-foundry`, a Node app where each feature
+  is its own route file and test file, so parallel items don't conflict.

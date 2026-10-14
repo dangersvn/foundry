@@ -6,7 +6,7 @@ agent inside its own git worktree, runs your tests itself, and merges into
 `main` only when they pass. Everything is recorded in a local SQLite ledger,
 so you can kill Foundry at any point and resume.
 
-This is v0: one-step formulas, one item at a time per process.
+This is v0: one-step formulas; `foundry work --workers N` or `foundry factory` run several items at once.
 
 ## Install
 
@@ -89,7 +89,9 @@ It usually takes one to three minutes, depending on the agent.
 | Command | What it does |
 | --- | --- |
 | `foundry run <formula> [--input <text>]` | Creates an item from a formula and works it now. `<formula>` is a built-in name (`health-endpoint`) or a path to a `.toml` file. `--input` adds request details for the agent. |
-| `foundry work` | Works every ready item, then exits. Run it after a crash or Ctrl-C: items whose lease expired go back to ready and are retried as a new attempt. |
+| `foundry add <formula> --input <text>` | Queues an item without working it. |
+| `foundry work [--workers N]` | Works every ready item, N at a time (each in its own worktree), then exits. Run it after a crash or Ctrl-C: items whose lease expired go back to ready and are retried as a new attempt. |
+| `foundry factory <formula> [--workers N]` | Live terminal board: main, each worker with its worktree and latest steps, the queue and activity. Each line you type at the `factory ›` prompt becomes a work item with that formula. `/quit` exits. |
 | `foundry status [item]` | Lists items, or shows one in detail, including the verifier output when it failed. |
 | `foundry log <item>` | Prints the item's audit log from the ledger. |
 

@@ -6,15 +6,19 @@ import { parseArgs } from "node:util";
 import { processItem, workerId, workQueue, type Outcome, type Workspace } from "../kernel/dispatcher.js";
 import { FoundryError } from "../kernel/errors.js";
 import * as git from "../kernel/git.js";
-import { Ledger, type LedgerEvent } from "../kernel/ledger.js";
+import { Ledger } from "../kernel/ledger.js";
 import { parseConfig } from "../schemas/config.js";
-import { parseFormula } from "../schemas/formula.js";
+import { parseFormula, type Formula } from "../schemas/formula.js";
+import { runFactory } from "./factory.js";
+import { summarize } from "./format.js";
 
 const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 const USAGE = `usage:
   foundry run <formula> [--input <text>]   create an item from a formula and work it
-  foundry work                              work ready items; resume after a crash
+  foundry add <formula> --input <text>      queue an item for workers to pick up
+  foundry work [--workers N]                work ready items (N in parallel); resume after a crash
+  foundry factory <formula> [--workers N]   live board of workers and worktrees; type to add work
   foundry status [item]                     list items, or show one in detail
   foundry log <item>                        show the item's audit log
 
@@ -51,6 +55,22 @@ function loadFormula(arg: string) {
   return parseFormula(fs.readFileSync(file, "utf8"), file);
 }
 
+// Formulas without a title (like a general "feature" formula) take the
+// request as the item's title.
+async function createItem(ws: Workspace, formula: Formula, input: string) {
+  const title = formula.title ?? (input ? (input.length > 60 ? input.slice(0, 57) + "..." : input) : formula.formula);
+  const ids = await ws.ledger.createRun({
+    formula: formula.formula,
+    formulaVersion: formula.version,
+    stepId: formula.step.id,
+    title,
+    goal: formula.step.goal,
+    input,
+    verify: formula.step.verify,
+  });
+  return { ...ids, title };
+}
+
 function report(o: Outcome): number {
   if (o.status === "done") return 0;
   console.error(o.error.format());
@@ -63,16 +83,8 @@ async function cmdRun(args: string[]): Promise<number> {
   const formula = loadFormula(positionals[0]!);
   const ws = await openWorkspace();
   try {
-    const { itemId, runId } = await ws.ledger.createRun({
-      formula: formula.formula,
-      formulaVersion: formula.version,
-      stepId: formula.step.id,
-      title: formula.title ?? formula.formula,
-      goal: formula.step.goal,
-      input: values.input ?? "",
-      verify: formula.step.verify,
-    });
-    ws.out(`${runId} created ${itemId}: ${formula.title ?? formula.formula}`);
+    const { itemId, runId, title } = await createItem(ws, formula, values.input ?? "");
+    ws.out(`${runId} created ${itemId}: ${title}`);
     if (!(await ws.ledger.claim(itemId, ws.owner, ws.config.leases.ttl_seconds))) {
       ws.out(`${itemId} was claimed by another worker; follow it with \`foundry status ${itemId}\``);
       return 0;
@@ -84,19 +96,53 @@ async function cmdRun(args: string[]): Promise<number> {
   }
 }
 
-async function cmdWork(): Promise<number> {
+function workersArg(args: string[]) {
+  const { positionals, values } = parseArgs({ args, allowPositionals: true, options: { workers: { type: "string", default: "1" } } });
+  const n = Number(values.workers);
+  if (!Number.isInteger(n) || n < 1) throw new FoundryError("config", `--workers must be a whole number, got "${values.workers}"`, "foundry work --workers 2");
+  return { positionals, workers: n };
+}
+
+async function cmdAdd(args: string[]): Promise<number> {
+  const { positionals, values } = parseArgs({ args, allowPositionals: true, options: { input: { type: "string" } } });
+  if (positionals.length !== 1) throw new FoundryError("config", "foundry add takes one formula", "foundry add ./formulas/feature.toml --input \"...\"");
+  const formula = loadFormula(positionals[0]!);
   const ws = await openWorkspace();
   try {
-    const { worked, fatal } = await workQueue(ws);
+    const { itemId, title } = await createItem(ws, formula, values.input ?? "");
+    ws.out(`${itemId} queued: ${title}  (start workers with \`foundry work\` or \`foundry factory\`)`);
+    return 0;
+  } finally {
+    await ws.ledger.close();
+  }
+}
+
+async function cmdWork(args: string[]): Promise<number> {
+  const { workers } = workersArg(args);
+  const ws = await openWorkspace();
+  try {
+    const owners = workers === 1 ? [ws.owner] : Array.from({ length: workers }, (_, i) => `${ws.owner}:w${i + 1}`);
+    const results = await Promise.all(owners.map((owner) => workQueue({ ...ws, owner })));
+    const fatal = results.find((r) => r.fatal)?.fatal;
     if (fatal) {
       console.error(fatal.format());
       return 1;
     }
+    const worked = results.flatMap((r) => r.worked);
     if (worked.length === 0) ws.out("nothing to do: no ready items");
     return worked.map(report).some((c) => c !== 0) ? 1 : 0;
   } finally {
     await ws.ledger.close();
   }
+}
+
+async function cmdFactory(args: string[]): Promise<number> {
+  const { positionals, workers } = workersArg(args);
+  if (positionals.length !== 1) throw new FoundryError("config", "foundry factory takes one formula for the work you add", "foundry factory ./formulas/feature.toml --workers 2");
+  if (!process.stdin.isTTY || !process.stdout.isTTY) throw new FoundryError("config", "foundry factory needs an interactive terminal", "run it in a terminal, or use `foundry add` and `foundry work`");
+  const formula = loadFormula(positionals[0]!);
+  const ws = await openWorkspace();
+  return runFactory(ws, workers, async (input) => (await createItem(ws, formula, input)).itemId);
 }
 
 const time = (ts: number) => new Date(ts).toISOString().replace("T", " ").slice(0, 23);
@@ -147,25 +193,6 @@ async function cmdStatus(args: string[]): Promise<number> {
   }
 }
 
-function summarize(e: LedgerEvent): string {
-  const p = e.payload as Record<string, any>;
-  switch (e.type) {
-    case "created": return `formula ${p.formula}`;
-    case "claimed": return `attempt ${p.attempt}`;
-    case "worktree_created": return `${p.branch} at ${p.path}`;
-    case "agent_started": return `${p.agent} (${p.agentInfo?.name ?? "?"} ${p.agentInfo?.version ?? ""})`.replace(" )", ")");
-    case "tool_call": return `${p.kind}: ${p.title} [${p.status}]`;
-    case "permission": return `${p.allow ? "allowed" : "denied"} ${p.kind}: ${p.command ?? p.title} (${p.reason})`;
-    case "agent_finished": return `stop reason ${p.stopReason}`;
-    case "verifying": return p.command;
-    case "verified": return `\`${p.command}\` passed`;
-    case "merged": return `${String(p.commit).slice(0, 12)} into ${p.target}${p.recovered ? " (found after restart)" : ""}`;
-    case "failed": case "agent_unavailable": return `[${p.layer}] ${p.message}`;
-    case "lease_expired": return `held by ${p.previousOwner}, attempt ${p.attempt}`;
-    default: return JSON.stringify(p);
-  }
-}
-
 async function cmdLog(args: string[]): Promise<number> {
   if (args.length !== 1) throw new FoundryError("config", "foundry log takes one item id", "foundry log WI-1");
   const ws = await openWorkspace();
@@ -183,7 +210,9 @@ async function main(argv: string[]): Promise<number> {
   const [cmd, ...rest] = argv;
   switch (cmd) {
     case "run": return cmdRun(rest);
-    case "work": return cmdWork();
+    case "add": return cmdAdd(rest);
+    case "work": return cmdWork(rest);
+    case "factory": return cmdFactory(rest);
     case "status": return cmdStatus(rest);
     case "log": return cmdLog(rest);
     case undefined: case "help": case "--help": case "-h":
