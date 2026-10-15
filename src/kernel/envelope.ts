@@ -95,6 +95,7 @@ function historyLines(p: EnvelopeParts): string[] {
     check: "check finding",
     note: "note",
     design: "design note",
+    decision_rejected: "decision rejected",
   };
   for (const n of p.notes) {
     lines.push(`  - attempt ${n.attempt} ${label[n.kind] ?? n.kind} (${n.author}):`);
@@ -142,4 +143,106 @@ function protocol(p: EnvelopeParts): string[] {
     "- Your own claim of success counts for nothing: Foundry runs the verifiers itself.",
   );
   return lines;
+}
+
+export interface ResolverParts {
+  kind: "answer" | "gate";
+  item: Item;
+  run: Run;
+  step: Step;
+  roleName: string;
+  rolePrompt: string;
+  worktree: string;
+  inputs: InputRef[];
+  questions: Question[]; // the open ones
+  notes: Note[];
+  decisions: DecisionRecord[]; // active decisions of the run
+  approved: { path: string; summary: string; item: string; step: string }[];
+  result: { summary: string; outputs?: Record<string, unknown>; artifacts?: { path: string; summary: string }[]; decisions?: { kind: string; question: string; choice: string }[] } | null;
+  changed: string[];
+  checks: Record<string, unknown>[];
+  rules: { layer: string; text: string }[];
+  context: string[];
+}
+
+// The envelope of an autopilot resolver: the decision point, everything it
+// may cite as evidence, and how to submit a resolution.
+export function buildResolverEnvelope(p: ResolverParts): string {
+  const { item, step } = p;
+  const out: string[] = [];
+  out.push(`# Foundry decision point for work item ${item.id}`, "");
+  out.push("```yaml");
+  out.push(`item: ${item.id}`);
+  out.push(`attempt: ${item.attempt}`);
+  out.push(`run: ${p.run.id} — ${JSON.stringify(p.run.title ?? p.run.goal)}`);
+  out.push(`step: ${step.id}`);
+  if (item.unit) out.push(`unit: ${item.unit}`);
+  out.push(`role: ${p.roleName} (${p.kind === "answer" ? `answering questions from ${step.role}` : `judging the gate of ${step.role}'s work`})`);
+  out.push(`resolve: ${p.kind}`);
+  if (item.goal.trim()) out.push("goal: |", indent(item.goal, 2));
+  out.push("request: |", indent(p.run.input.trim() || "(none)", 2));
+  if (p.kind === "answer") {
+    out.push("open_questions:");
+    for (const q of p.questions) {
+      out.push(`  - id: ${q.id}`, `    question: ${JSON.stringify(q.question)}`, `    options: ${JSON.stringify(JSON.parse(q.options_json))}${q.allow_other ? "   # another answer is allowed" : "   # pick one of these"}`);
+    }
+  } else {
+    out.push("output:");
+    out.push(`  summary: ${JSON.stringify(p.result?.summary ?? "(no result submitted)")}`);
+    out.push(`  commit: ${item.commit_sha ?? "none"}   # \`git show HEAD\` in this worktree`);
+    out.push(`  changed_files: ${JSON.stringify(p.changed)}`);
+    for (const [k, v] of Object.entries(p.result?.outputs ?? {})) out.push(`  output ${k}: ${JSON.stringify(v)}`);
+    for (const a of p.result?.artifacts ?? []) out.push(`  artifact: ${a.path} — ${a.summary}`);
+    for (const d of p.result?.decisions ?? []) out.push(`  decision: (${d.kind}) ${JSON.stringify(d.question)} -> ${JSON.stringify(d.choice)}`);
+    out.push("verifiers:   # all passed, or the item would not be at its gate");
+    if (p.checks.length === 0) out.push("  []");
+    for (const c of p.checks) out.push(`  - ${JSON.stringify(c)}`);
+  }
+  out.push("inputs:");
+  if (p.inputs.length === 0) out.push("  []");
+  for (const i of p.inputs) out.push(`  - ${i.step}${i.unit ? ` (${i.unit})` : ""} ${i.item} [${i.status}]: ${JSON.stringify(i.summary)}`);
+  out.push("approved_artifacts:   # cite as {\"kind\": \"artifact\", \"ref\": \"<path>\"}");
+  if (p.approved.length === 0) out.push("  []");
+  for (const a of p.approved) out.push(`  - ${a.path} — ${a.summary} (${a.item} ${a.step})`);
+  out.push("decisions:   # cite as {\"kind\": \"decision\", \"ref\": \"DEC-n\"}");
+  if (p.decisions.length === 0) out.push("  []");
+  for (const d of p.decisions) out.push(`  - ${d.id} (${d.kind}, ${d.step_id ?? "-"}): ${JSON.stringify(d.question)} -> ${JSON.stringify(d.choice)}`);
+  out.push("history:");
+  if (p.notes.length === 0) out.push("  []");
+  for (const n of p.notes) out.push(`  - attempt ${n.attempt} ${n.kind} (${n.author}):`, indent(n.body.length > 3000 ? "…" + n.body.slice(-3000) : n.body, 6));
+  out.push("context:");
+  if (p.context.length === 0) out.push("  []");
+  for (const c of p.context) out.push(`  - ${c}`);
+  out.push("```", "");
+  if (p.rules.length) {
+    out.push("## Rules", "", "Layered from general to specific; where they differ, the later one wins.", "");
+    for (const r of p.rules) out.push(`### ${r.layer} rules`, "", r.text.trim(), "");
+  }
+  if (p.rolePrompt.trim()) out.push("## Your role", "", p.rolePrompt.trim(), "");
+  const f = "./.foundry/bin/foundry";
+  out.push(
+    "## How to resolve this decision point",
+    "",
+    `- The run is in autopilot: you decide instead of a person. Read what you need in ${p.worktree}, but do not change any file; your changes are discarded.`,
+    "- Base every choice on evidence and cite it. Foundry checks each citation: the run's request (`{\"kind\": \"request\", \"quote\": \"words from it\"}`), an approved artifact listed above, a file in this workspace (`{\"kind\": \"context\", \"ref\": \"src/app.js\"}`) or a decision listed above. A choice with no citation, or with one that does not resolve, is logged as an assumption for a person to review later.",
+  );
+  if (p.kind === "answer") {
+    out.push(
+      "- Answer every open question. When the evidence does not settle it, pick the most reversible option and say so in the rationale.",
+      "- Write .foundry/resolution.json:",
+      "  ```json",
+      '  {"answers": [{"question": "Q-1", "answer": "one of the options, or your own", "rationale": "why", "evidence": [{"kind": "request", "quote": "..."}]}]}',
+      "  ```",
+    );
+  } else {
+    out.push(
+      "- Approve when the work does what the goal and the request ask and is consistent with the inputs and decisions above; reject otherwise. A rejection sends the work back with your comment, so say exactly what to change.",
+      "- Write .foundry/resolution.json:",
+      "  ```json",
+      '  {"verdict": "approve", "comment": "why (or what to change)", "findings": ["one string each"], "evidence": [{"kind": "artifact", "ref": "..."}]}',
+      "  ```",
+    );
+  }
+  out.push(`- Then run \`${f} submit --file .foundry/resolution.json\`. It is checked against the schema; fix and resubmit if it is rejected. Then end your turn.`);
+  return out.join("\n") + "\n";
 }

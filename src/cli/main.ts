@@ -28,14 +28,17 @@ const USAGE = `usage:
   foundry answer <WI-n|Q-n> <answer>            answer an item's question
   foundry approve <WI-n> [--comment <text>]     approve an item at its gate
   foundry reject <WI-n> --comment <text>        send an item at its gate back with a comment
-  foundry decisions [RUN-n]                     the decision log
+  foundry decisions [RUN-n] [--kind <kind>]     the decision log (kinds: decision, assumption, deviation, control)
+  foundry reject-decision <DEC-n> --comment <text>   reject a decision; the work that relied on it is re-queued
+  foundry autopilot on|off|status               the autopilot kill switch
   foundry why <file>:<line>                     commit, item, decisions, inputs and run behind a line
   foundry gc                                    remove failed and abandoned lanes' worktrees
   foundry validate <pack>                       check a pack
   foundry import aidlc [--source <dir>] [--out <dir>]   import AI-DLC into packs/aidlc
   foundry plan <pack> [--profile <p>] [--param k=v] --dry-run [--json]   show the compiled plan
 
-run and add also take --profile <p> and --param k=v (repeatable) for packs with profiles.
+run and add also take --mode manual|autopilot (default manual), and --profile <p> and --param k=v
+(repeatable) for packs with profiles.
 
 Inside an item's worktree, agents use ./.foundry/bin/foundry submit | note | ask | handoff.
 
@@ -87,12 +90,17 @@ function parseParams(list: string[] | undefined): Record<string, string> {
 
 // Compiles the pack (and profile) into the formula the run pins. Formulas
 // without a title take the request as the run's title.
-async function startRun(ws: Workspace, pack: Pack, input: string, profile?: string, paramList?: string[]) {
+function parseMode(mode: string | undefined): "manual" | "autopilot" {
+  if (mode === undefined || mode === "manual" || mode === "autopilot") return mode ?? "manual";
+  throw new FoundryError("config", `--mode is manual or autopilot, got "${mode}"`, "foundry run packs/aidlc --profile bugfix --mode autopilot");
+}
+
+async function startRun(ws: Workspace, pack: Pack, input: string, profile?: string, paramList?: string[], mode: "manual" | "autopilot" = "manual") {
   const c = compile(pack, { profile, params: parseParams(paramList), repo: ws.repo, testCommand: ws.config.project.test_command });
   const f = c.formula;
   const title = (input ? (input.length > 60 ? input.slice(0, 57) + "..." : input) : undefined) ?? f.title ?? f.formula;
   const named = f.title && !input ? f.title : title;
-  const ids = await ws.ledger.startRun({ formula: f, title: pack.formula.oneStep ? (f.title ?? title) : named, input, packDir: pack.dir, params: c.params });
+  const ids = await ws.ledger.startRun({ formula: f, title: pack.formula.oneStep ? (f.title ?? title) : named, input, packDir: pack.dir, params: c.params, mode });
   if (c.profile || Object.keys(c.params).length) await ws.ledger.runNote(ids.runId, "run_setup", { profile: c.profile, params: c.params, settings: c.settings, setup: c.setup });
   return { ...ids, title };
 }
@@ -116,12 +124,13 @@ const failureOf = async (ws: Workspace, itemId: string) => {
 async function reportRun(ws: Workspace, runId: string): Promise<number> {
   const run = (await ws.ledger.getRun(runId))!;
   const items = await ws.ledger.listItems(runId);
+  const why = (i: Item) => (i.hold ? `  (waits for you: ${i.hold})` : "");
   for (const i of items.filter((i) => i.status === "waiting_input")) {
     for (const q of (await ws.ledger.questions(i.id)).filter((q) => q.answer === null)) {
-      ws.out(`${i.id} asks ${q.id}: ${q.question}  [${JSON.parse(q.options_json).join(" / ")}]  ->  foundry answer ${i.id} "<answer>"`);
+      ws.out(`${i.id} asks ${q.id}: ${q.question}  [${JSON.parse(q.options_json).join(" / ")}]  ->  foundry answer ${i.id} "<answer>"${why(i)}`);
     }
   }
-  for (const i of items.filter((i) => i.status === "at_gate")) ws.out(`${i.id} is at its gate  ->  foundry status ${i.id}, then foundry approve ${i.id} or foundry reject ${i.id} --comment "..."`);
+  for (const i of items.filter((i) => i.status === "at_gate")) ws.out(`${i.id} is at its gate  ->  foundry status ${i.id}, then foundry approve ${i.id} or foundry reject ${i.id} --comment "..."${why(i)}`);
   const failed = items.filter((i) => i.status === "failed");
   for (const i of failed) console.error((await failureOf(ws, i.id)).format());
   if (run.status === "done") ws.out(`${runId} done: ${items.filter((i) => i.status === "done").length} items done, ${items.filter((i) => i.status === "skipped").length} skipped`);
@@ -129,12 +138,14 @@ async function reportRun(ws: Workspace, runId: string): Promise<number> {
 }
 
 async function cmdRun(args: string[]): Promise<number> {
-  const { positionals, values, workers: n } = workersArg(args, { input: { type: "string" }, profile: { type: "string" }, param: { type: "string", multiple: true } as never });
+  const { positionals, values, workers: n } = workersArg(args, { input: { type: "string" }, profile: { type: "string" }, mode: { type: "string" }, param: { type: "string", multiple: true } as never });
   if (positionals.length !== 1) throw new FoundryError("config", "foundry run takes one pack or formula", "foundry run health-endpoint --input \"...\"");
+  const mode = parseMode(values.mode);
   const pack = resolvePack(positionals[0]!);
   const ws = await openWorkspace();
   try {
-    const { runId, itemIds, title } = await startRun(ws, pack, values.input ?? "", values.profile, values.param as unknown as string[]);
+    const { runId, itemIds, title } = await startRun(ws, pack, values.input ?? "", values.profile, values.param as unknown as string[], mode);
+    if (mode === "autopilot") ws.out(`${runId} runs in autopilot: roles answer questions and pass gates; \`foundry autopilot off\` hands every decision point back to you`);
     for (const id of itemIds) ws.out(`${runId} created ${id}: ${title}`);
     const { fatal } = await workers(ws, n ?? ws.config.workers.count, { runId });
     if (fatal) {
@@ -151,13 +162,14 @@ async function cmdAdd(args: string[]): Promise<number> {
   const { positionals, values } = parseArgs({
     args,
     allowPositionals: true,
-    options: { input: { type: "string" }, profile: { type: "string" }, param: { type: "string", multiple: true } },
+    options: { input: { type: "string" }, profile: { type: "string" }, mode: { type: "string" }, param: { type: "string", multiple: true } },
   });
   if (positionals.length !== 1) throw new FoundryError("config", "foundry add takes one pack or formula", "foundry add ./formulas/feature.toml --input \"...\"");
+  const mode = parseMode(values.mode);
   const pack = resolvePack(positionals[0]!);
   const ws = await openWorkspace();
   try {
-    const { itemIds, title } = await startRun(ws, pack, values.input ?? "", values.profile, values.param);
+    const { itemIds, title } = await startRun(ws, pack, values.input ?? "", values.profile, values.param, mode);
     ws.out(`${itemIds.join(", ")} queued: ${title}  (start workers with \`foundry work\` or \`foundry factory\`)`);
     return 0;
   } finally {
@@ -211,6 +223,7 @@ async function cmdStatus(args: string[]): Promise<number> {
     const item = await ws.ledger.getItem(args[0]!);
     if (!item) throw new FoundryError("ledger", `no item ${args[0]}`, "foundry status");
     const events = await ws.ledger.events(item.id);
+    const run = await ws.ledger.getRun(item.run_id);
     const of = (t: string) => events.filter((e) => e.type === t);
     const claimed = of("claimed")[0];
     const end = [...of("merged"), ...of("completed"), ...of("failed"), ...of("skipped")].at(-1);
@@ -218,7 +231,7 @@ async function cmdStatus(args: string[]): Promise<number> {
     const lines = [
       `${item.id}: ${item.title}`,
       `  status:    ${item.status.replace("_", " ")} (attempt ${item.attempt} of ${item.max_attempts})`,
-      `  run:       ${item.run_id}, step ${item.step_id}${item.unit ? `, unit ${item.unit}` : ""}, role ${item.role ?? "worker"}`,
+      `  run:       ${item.run_id} (${run?.mode ?? "manual"}), step ${item.step_id}${item.unit ? `, unit ${item.unit}` : ""}, role ${item.role ?? "worker"}`,
       `  agent:     ${item.agent ?? "-"}`,
       `  worktree:  ${item.worktree ?? "-"}${item.branch ? ` (${item.branch})` : ""}${item.lane_id ? `, lane ${item.lane_id}` : ""}`,
       `  verify:    ${item.verify || "-"}`,
@@ -234,8 +247,9 @@ async function cmdStatus(args: string[]): Promise<number> {
       lines.push(`  question:  ${q.id} (attempt ${q.attempt}) ${q.question}  [${JSON.parse(q.options_json).join(" / ")}${q.allow_other ? " / other" : ""}]`);
       lines.push(q.answer === null ? `             not answered: foundry answer ${item.id} "<answer>"` : `             answered "${q.answer}" by ${q.answered_by}`);
     }
+    if (item.hold) lines.push(`  hold:      waits for a person: ${item.hold}`);
     if (item.status === "at_gate") {
-      lines.push("  gate:      waiting for a person");
+      lines.push(run?.mode === "autopilot" && !item.hold ? "  gate:      autopilot resolves it" : "  gate:      waiting for a person");
       const reviewed = of("reviewed").at(-1);
       if (reviewed) {
         const findings = reviewed.payload.findings as string[];
@@ -269,7 +283,7 @@ async function cmdStatus(args: string[]): Promise<number> {
 async function statusRun(ws: Workspace, runId: string): Promise<number> {
   const run = await ws.ledger.getRun(runId);
   if (!run) throw new FoundryError("ledger", `no run ${runId}`, "foundry status");
-  ws.out(`${run.id}: ${run.title ?? run.goal}  [${run.status}]  formula ${run.formula} v${run.formula_version}`);
+  ws.out(`${run.id}: ${run.title ?? run.goal}  [${run.status}]  formula ${run.formula} v${run.formula_version}, ${run.mode ?? "manual"} mode`);
   const items = await ws.ledger.listItems(runId);
   const order = (JSON.parse(run.formula_json ?? '{"steps":[]}') as { steps: { id: string }[] }).steps.map((s) => s.id);
   const steps = (await ws.ledger.runSteps(runId)).sort((a, b) => order.indexOf(a.step_id) - order.indexOf(b.step_id));
@@ -280,8 +294,9 @@ async function statusRun(ws: Workspace, runId: string): Promise<number> {
   const questions = runEvents.filter((e) => e.type === "asked").reduce((n, e) => n + (e.payload.questions as unknown[]).length, 0);
   ws.out(
     `  metrics: ${questions} questions, ${count("at_gate")} gates (${count("approved")} approved, ${count("rejected")} rejected), ` +
-      `${count("agent_started") + count("review_agent_started")} agent sessions, ${count("tool_call") + count("review_tool_call")} tool calls, ` +
-      `${count("permission") + count("review_permission")} permission requests, ${count("retry")} retries` +
+      `${count("agent_started") + count("review_agent_started") + count("resolver_agent_started")} agent sessions, ${count("tool_call") + count("review_tool_call") + count("resolver_tool_call")} tool calls, ` +
+      `${count("permission") + count("review_permission") + count("resolver_permission")} permission requests, ${count("retry")} retries` +
+      (run.mode === "autopilot" ? `, ${count("held")} human stops, ${(await ws.ledger.decisions({ runId, kind: "assumption" })).length} assumptions` : "") +
       (started ? `, ${(((ended ?? Date.now()) - started) / 60000).toFixed(1)} min${ended ? "" : " so far"}` : ""),
   );
   for (const s of steps) {
@@ -351,15 +366,55 @@ async function cmdGate(args: string[], approve: boolean): Promise<number> {
 }
 
 async function cmdDecisions(args: string[]): Promise<number> {
+  const { positionals, values } = parseArgs({ args, allowPositionals: true, options: { kind: { type: "string" } } });
+  const kinds = ["decision", "assumption", "deviation", "control"];
+  if (values.kind && !kinds.includes(values.kind)) throw new FoundryError("config", `--kind is one of ${kinds.join(", ")}, got "${values.kind}"`, "foundry decisions RUN-1 --kind assumption");
   const ws = await openWorkspace();
   try {
-    const records = await ws.ledger.decisions(args[0] ? { runId: args[0] } : {});
-    if (records.length === 0) ws.out("no decisions recorded yet");
+    const records = await ws.ledger.decisions({ runId: positionals[0], kind: values.kind });
+    const status = await ws.ledger.decisionStatus(positionals[0]);
+    if (records.length === 0) ws.out(values.kind ? `no ${values.kind} records` : "no decisions recorded yet");
     for (const d of records) {
-      ws.out(`${d.id.padEnd(7)} ${d.kind.padEnd(10)} ${(d.item_id ?? d.run_id).padEnd(6)} ${d.step_id ?? "-"}  ${d.actor}`);
+      const st = status.get(d.id);
+      ws.out(`${d.id.padEnd(7)} ${d.kind.padEnd(10)} ${(d.item_id ?? d.run_id).padEnd(6)} ${d.step_id ?? "-"}  ${d.actor}${st ? `  [${st.status} by ${st.by}]` : ""}`);
       ws.out(`        ${d.question}  ->  ${d.choice}${d.supersedes ? `  (supersedes ${d.supersedes})` : ""}`);
       if (d.rationale) ws.out(`        why: ${d.rationale}`);
+      const evidence = JSON.parse(d.evidence_json) as string[];
+      if (evidence.length) ws.out(`        evidence: ${evidence.join(", ")}`);
     }
+    if (values.kind === "assumption" && records.length) ws.out(`\nreview each one; reject one with: foundry reject-decision <DEC-n> --comment "what is right instead"`);
+    return 0;
+  } finally {
+    await ws.ledger.close();
+  }
+}
+
+async function cmdRejectDecision(args: string[]): Promise<number> {
+  const { positionals, values } = parseArgs({ args, allowPositionals: true, options: { comment: { type: "string" } } });
+  const id = positionals[0];
+  if (!id || !values.comment) throw new FoundryError("config", "foundry reject-decision takes a decision id and --comment", 'foundry reject-decision DEC-4 --comment "use Postgres"');
+  const ws = await openWorkspace();
+  try {
+    const { rejection, requeued } = await ws.ledger.rejectDecision(id, person(ws.repo), values.comment);
+    ws.out(`${id} rejected (${rejection})${requeued.length ? `; re-queued ${requeued.join(", ")} with your comment; continue with \`foundry work\`` : "; no finished work relied on it"}`);
+    return 0;
+  } finally {
+    await ws.ledger.close();
+  }
+}
+
+async function cmdAutopilot(args: string[]): Promise<number> {
+  const sub = args[0] ?? "status";
+  if (!["on", "off", "status"].includes(sub)) throw new FoundryError("config", `foundry autopilot takes on, off or status, got "${sub}"`, "foundry autopilot off");
+  const ws = await openWorkspace();
+  try {
+    if (sub === "status") {
+      ws.out(`autopilot is ${(await ws.ledger.autopilotOn()) ? "on: autopilot runs resolve their decision points with roles" : "off: every decision point waits for a person"}`);
+      return 0;
+    }
+    const held = await ws.ledger.setAutopilot(sub === "on", person(ws.repo));
+    if (sub === "on") ws.out("autopilot is on; decision points already waiting for you stay with you");
+    else ws.out(`autopilot is off: every decision point waits for a person${held.length ? `; now waiting for you: ${held.join(", ")}` : ""}`);
     return 0;
   } finally {
     await ws.ledger.close();
@@ -507,6 +562,8 @@ async function main(argv: string[]): Promise<number> {
     case "approve": return cmdGate(rest, true);
     case "reject": return cmdGate(rest, false);
     case "decisions": return cmdDecisions(rest);
+    case "reject-decision": return cmdRejectDecision(rest);
+    case "autopilot": return cmdAutopilot(rest);
     case "why": return cmdWhy(rest);
     case "gc": return cmdGc();
     case "validate": return cmdValidate(rest);

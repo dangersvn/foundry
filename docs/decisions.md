@@ -538,3 +538,90 @@ Each entry gives what was decided, the options, the choice and the reason.
 - **Assumption:** the other 25 stages only write documents under the record
   folder. One that writes code anyway still works; its change merges at the
   end of the run with the full verify.
+
+## D59. Autopilot resolves on the same path (2b)
+- `--mode manual|autopilot` on `run` and `add`, stored on the run (ledger
+  schema v4 adds `runs.mode`, `items.hold` and a `settings` table). Manual is
+  the Phase 1 path unchanged.
+- In autopilot a question still puts the item in Waiting for input and an
+  output still goes At gate. Workers then claim the open decision point with
+  a lease (status unchanged; patrol frees an expired one) and run a resolver
+  session in the item's lane: questions go to the pack's answerer, gates to
+  the step's reviewer or else the pack's reviewer. The resolver submits a
+  schema-checked resolution with the same `foundry submit`; the kernel
+  applies it through the same `answer` and `gate` functions a person uses,
+  with the role and agent as the actor. A reviewer rejection is a rejection
+  with its comment, exactly as from a person.
+- The resolver reads but cannot change the work: the worktree is reset
+  after its session.
+- A resolver that ends without a valid resolution frees the decision point
+  for another try; after 2 failed sessions on one attempt it waits for a
+  person.
+
+## D60. Resolver roles in the pack
+- What: "imported from AI-DLC's product lead / architecture reviewer".
+- Options: new `answerer` and `reviewer` role files; name existing roles.
+- Choice: `pack.toml` names them under `[autopilot]` (defaults `answerer`
+  and `reviewer`); the AI-DLC import names `aidlc-product-lead-agent` and
+  `aidlc-architecture-reviewer-agent`. Copying them as new role files would
+  have changed the Phase 1 count of 14 roles. How to resolve (cite evidence,
+  submit a resolution) is in the resolver envelope, so the role prompts stay
+  AI-DLC's own. A pack without these roles uses an empty role prompt.
+
+## D61. Evidence is checked, not trusted
+- A citation is `{kind, ref?, quote?}`: `request` (the run's input; a quote
+  must appear in it), `artifact` (listed by a finished item of the run and
+  present in the worktree or on main), `context` (a file in the worktree or
+  on main, no `..` or absolute paths) or `decision` (a record nothing has
+  rejected). An answer is a `decision` only when it cites something and every
+  citation resolves; otherwise it is logged as an `assumption` with the
+  problems in its rationale. A made-up citation counts against the answer
+  rather than being ignored.
+- "Picks the most reversible option" is the answerer's instruction in its
+  envelope; the kernel cannot judge reversibility.
+- Gate verdicts record their resolved citations but stay `decision` records:
+  the brief asks for evidence on answers.
+
+## D62. Guards
+- The resolver role is never the step's own role (it asked, or it did the
+  work); such a decision point waits for a person rather than going to some
+  third role.
+- The resolver runs on the first configured agent (in `[dispatch] prefer`
+  order, then foundry.toml order) other than the item's agent; with one
+  agent it uses that one.
+- `[autopilot] locked_paths` (globs, `**` across folders): in autopilot a
+  change touching one stops at a gate even if the step has none, and waits
+  for a person. Environment-changing steps always wait for a person. In
+  manual mode locked paths change nothing (everything waits for a person).
+- A step whose gate a reviewer resolves skips the separate advisory review
+  session: it would be the same role judging the same work twice. When the
+  gate waits for a person, the advisory review runs as in Phase 1.
+
+## D63. Rejecting a decision re-queues downstream work
+- `foundry reject-decision DEC-n --comment` writes a new record (choice
+  `rejected`, `supersedes` DEC-n); records are never edited, and
+  `foundry decisions` shows `[rejected by DEC-m]`. The item that made the
+  decision and every item downstream of it (through their inputs) get the
+  comment in their history and, when finished, go back to Ready (the run and
+  steps reopen; a merged item gets a new lane from main). Each re-queued item
+  gets one more attempt even if it had used all of them.
+- To keep order, an item is claimed only once every item of the steps it
+  needs has finished, and it reads their latest results at claim time.
+- Rejected decisions no longer travel in downstream envelopes.
+- **Assumption:** re-running everything downstream is right; a smarter
+  re-run that skips unaffected work is Phase 3+.
+- A re-run does not change how many items a fan-out made.
+
+## D64. Kill switch
+- `foundry autopilot off` is workspace-wide (the ledger's `settings`): it
+  puts every open decision point of every open autopilot run on hold for a
+  person, a resolver's late verdict is refused (it must hold the lease and
+  the point must not be on hold), and new decision points are held as they
+  arise. `foundry autopilot on` lets new ones go to roles again; held points
+  stay with the person.
+- **Assumption:** one switch per workspace is what "every waiting and future
+  decision point" means; per-run switches are not needed in v2.
+
+## D65. Human stops and metrics
+- `foundry status RUN-n` in autopilot adds the number of holds (human stops)
+  and assumptions; resolver sessions count as agent sessions.

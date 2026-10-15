@@ -28,6 +28,9 @@ export const Config = z
       .default({ docs_paths: ["aidlc-docs/", "aidlc/"] }),
     // Layered rules loaded into every envelope, general to specific.
     rules: z.object({ org: z.string().optional(), team: z.string().optional(), project: z.string().optional() }).default({}),
+    // A gate whose change touches a locked path waits for a person even in
+    // autopilot ("payments/**", "src/auth/*.ts").
+    autopilot: z.object({ locked_paths: z.array(z.string()).default([]) }).default({ locked_paths: [] }),
   })
   .superRefine((cfg, ctx) => {
     for (const name of cfg.dispatch.prefer ?? []) {
@@ -60,4 +63,11 @@ export function parseConfig(text: string, source = "foundry.toml"): Config {
 // The first preferred agent, else the first configured one.
 export function pickAgent(cfg: Config): string {
   return cfg.dispatch.prefer?.[0] ?? Object.keys(cfg.agents)[0]!;
+}
+
+// An agent other than `author` when one is configured (a resolver or judge
+// never runs on the agent whose work it judges, where it can avoid it).
+export function otherAgent(cfg: Config, author: string | null): string {
+  const order = [...(cfg.dispatch.prefer ?? []), ...Object.keys(cfg.agents)];
+  return order.find((a) => a !== author) ?? pickAgent(cfg);
 }

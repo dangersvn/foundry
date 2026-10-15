@@ -22,6 +22,8 @@ export const PackManifest = z.object({
   name: z.string().min(1),
   version: z.string().min(1),
   formula: z.string().default("formula.toml"),
+  // The roles that resolve decision points in autopilot.
+  autopilot: z.object({ answerer: z.string().default("answerer"), reviewer: z.string().default("reviewer") }).default({ answerer: "answerer", reviewer: "reviewer" }),
 });
 
 // A profile resolves at compile time into a concrete plan: which steps run,
@@ -63,6 +65,7 @@ export interface Pack {
   profiles: Map<string, Profile>;
   verifiers: Map<string, VerifierDef>;
   setup: z.infer<typeof Setup>;
+  autopilot: { answerer: string; reviewer: string };
 }
 
 export const DEFAULT_ROLE = "worker";
@@ -88,7 +91,7 @@ function check<T>(schema: z.ZodType<T>, raw: unknown, file: string): T {
 export function loadPack(target: string): Pack {
   if (fs.statSync(target).isFile()) {
     const formula = parseFormula(fs.readFileSync(target, "utf8"), target);
-    return { dir: null, name: formula.formula, version: String(formula.version), formula, roles: new Map(), profiles: new Map(), verifiers: new Map(), setup: Setup.parse({}) };
+    return { dir: null, name: formula.formula, version: String(formula.version), formula, roles: new Map(), profiles: new Map(), verifiers: new Map(), setup: Setup.parse({}), autopilot: { answerer: "answerer", reviewer: "reviewer" } };
   }
   const manifestPath = path.join(target, "pack.toml");
   if (!fs.existsSync(manifestPath)) throw new FoundryError("config", `${target} has no pack.toml`, "pass a pack folder or a formula .toml file");
@@ -113,7 +116,7 @@ export function loadPack(target: string): Pack {
   const verifiers = new Map(tomls("verifiers").map((f) => check(VerifierDef, readToml(f), f)).map((v) => [v.id, v] as const));
   const setupPath = path.join(target, "setup.toml");
   const setup = fs.existsSync(setupPath) ? check(Setup, readToml(setupPath), setupPath) : Setup.parse({});
-  return { dir: target, name: manifest.name, version: manifest.version, formula, roles, profiles, verifiers, setup };
+  return { dir: target, name: manifest.name, version: manifest.version, formula, roles, profiles, verifiers, setup, autopilot: manifest.autopilot };
 }
 
 // Every reference in a pack resolves: roles, instructions, knowledge, schemas.
@@ -132,6 +135,8 @@ export function validatePack(pack: Pack): string[] {
     for (const c of s.context) if (!exists(c)) problems.push(`step ${s.id}: context file ${c} not found`);
   }
   for (const [name, v] of pack.verifiers) if (!BUILTIN_CHECKS.has(v.builtin)) problems.push(`verifier ${name}: no built-in check "${v.builtin}"`);
+  // A role named in [autopilot] must exist; the default names may be absent.
+  for (const [k, role] of Object.entries(pack.autopilot)) if (role !== k && !pack.roles.has(role)) problems.push(`autopilot ${k}: role "${role}" is not in roles/`);
   for (const [name, p] of pack.profiles) {
     for (const id of p.steps) if (!pack.formula.steps.some((s) => s.id === id)) problems.push(`profile ${name}: step "${id}" is not in the formula`);
   }

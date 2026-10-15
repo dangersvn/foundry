@@ -265,7 +265,18 @@ export function importAidlc(opts: { source: string; out: string; rules: string }
 
   write(
     "pack.toml",
-    stringify({ name: "aidlc", version: tag.replace(/^v/, ""), formula: "formula.toml", source: "https://github.com/awslabs/aidlc-workflows", tag, commit, imported_by: "foundry import aidlc" }),
+    stringify({
+      name: "aidlc",
+      version: tag.replace(/^v/, ""),
+      formula: "formula.toml",
+      source: "https://github.com/awslabs/aidlc-workflows",
+      tag,
+      commit,
+      imported_by: "foundry import aidlc",
+      // Autopilot resolvers (brief 2b): questions go to the product lead,
+      // gates without a stage reviewer to the architecture reviewer.
+      autopilot: { answerer: "aidlc-product-lead-agent", reviewer: "aidlc-architecture-reviewer-agent" },
+    }),
   );
 
   const report: ImportReport = {

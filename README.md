@@ -129,6 +129,24 @@ so roles render into the agent's own files, and `[project] test_command =
 "npm test"` so every code merge runs your tests. The full walkthrough is
 `docs/manual-runs.md`.
 
+### Autopilot (Phase 2)
+
+```sh
+foundry run packs/aidlc --profile bugfix --mode autopilot --input "..."
+foundry decisions RUN-1 --kind assumption       # answers given without evidence: review these
+foundry reject-decision DEC-7 --comment "use Postgres"   # re-queues the work that relied on it
+foundry autopilot off                           # kill switch: every decision point waits for you
+```
+
+In autopilot a role answers questions (the pack's answerer; AI-DLC's
+product lead) and passes gates (the step's reviewer, else the pack's
+reviewer) after the verifiers pass. Every answer must cite evidence the
+kernel can resolve (the request, an approved artifact, a workspace file, an
+earlier decision), or it is logged as an assumption. The resolver never is
+the role that asked, and runs on another agent when two are configured.
+Gates whose change touches `[autopilot] locked_paths` in `foundry.toml`, and
+steps that would change a real environment, still wait for you.
+
 ## Formulas
 
 A v0 formula has one step: a goal for the agent and a verify command that

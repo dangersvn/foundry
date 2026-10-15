@@ -34,6 +34,7 @@ interface RunsTable {
   formula_json: string | null;
   pack_dir: string | null;
   params_json: string | null;
+  mode: string | null; // manual | autopilot
 }
 interface RunStepsTable {
   run_id: string;
@@ -66,6 +67,11 @@ interface ItemsTable {
   commit_sha: string | null;
   lane_id: string | null;
   lane_start: string | null; // the lane commit this item's current attempt builds on
+  hold: string | null; // why this decision point waits for a person in autopilot
+}
+interface SettingsTable {
+  key: string;
+  value: string;
 }
 // A lane is one worktree and branch that items build on in turn: one per
 // unit of work, one per run for document-only steps, else one per item.
@@ -161,6 +167,7 @@ interface DB {
   questions: QuestionsTable;
   decisions: DecisionsTable;
   lanes: LanesTable;
+  settings: SettingsTable;
 }
 
 export type Item = Selectable<ItemsTable>;
@@ -170,7 +177,16 @@ export type Note = Selectable<NotesTable>;
 export type Question = Selectable<QuestionsTable>;
 export type DecisionRecord = Selectable<DecisionsTable>;
 export type LedgerEvent = Omit<Selectable<EventsTable>, "payload_json"> & { payload: Record<string, unknown> };
-type ItemFields = Partial<Pick<ItemsTable, "agent" | "worktree" | "branch" | "result_json" | "commit_sha" | "lane_start">>;
+type ItemFields = Partial<Pick<ItemsTable, "agent" | "worktree" | "branch" | "result_json" | "commit_sha" | "lane_start" | "hold">>;
+const DECISION_POINT: Status[] = ["waiting_input", "at_gate"];
+
+// How a role (not a person) resolved a decision point in autopilot.
+export interface Resolver {
+  owner: string; // the worker holding the decision point's lease
+  kind: "decision" | "assumption";
+  rationale: string;
+  evidence: string[];
+}
 const OPEN_LANE: LaneStatus[] = ["open", "merge_ready", "merging"];
 
 // What an item reads from the steps it needs.
@@ -200,6 +216,7 @@ export interface StartRun {
   input: string;
   packDir: string | null;
   params?: Record<string, string>;
+  mode?: "manual" | "autopilot";
 }
 
 export class Ledger {
@@ -246,7 +263,8 @@ export class Ledger {
       if (version < 1) await migrateV1(db);
       if (version < 2) await migrateV2(db);
       if (version < 3) await migrateV3(db);
-      if (version < 3) await sql`pragma user_version = 3`.execute(db);
+      if (version < 4) await migrateV4(db);
+      if (version < 4) await sql`pragma user_version = 4`.execute(db);
     });
   }
 
@@ -301,10 +319,11 @@ export class Ledger {
           formula_json: JSON.stringify(r.formula),
           pack_dir: r.packDir,
           params_json: JSON.stringify(r.params ?? {}),
+          mode: r.mode ?? "manual",
         })
         .execute();
       for (const s of r.formula.steps) await db.insertInto("run_steps").values({ run_id: runId, step_id: s.id, status: "pending" }).execute();
-      await this.insertEvent(db, runId, null, "run_started", "kernel", { formula: r.formula.formula, title: r.title });
+      await this.insertEvent(db, runId, null, "run_started", "kernel", { formula: r.formula.formula, title: r.title, mode: r.mode ?? "manual" });
       const itemIds = await this.advance(db, runId);
       return { runId, itemIds };
     });
@@ -451,6 +470,7 @@ export class Ledger {
         commit_sha: null,
         lane_id: laneId,
         lane_start: null,
+        hold: null,
       })
       .execute();
     await this.insertEvent(db, run.id, id, "created", "kernel", { formula: formula.formula, title, step: step.id, unit, lane: laneId });
@@ -474,8 +494,18 @@ export class Ledger {
       const now = Date.now();
       // One item works in a lane at a time: the lane belongs to the item that
       // started in it until that item finishes.
-      const mine = await db.selectFrom("items").select("lane_id").where("id", "=", itemId).executeTakeFirst();
-      if (mine?.lane_id) {
+      const mine = await db.selectFrom("items").selectAll().where("id", "=", itemId).executeTakeFirst();
+      if (!mine) return false;
+      // A re-queued item waits until every step it needs has finished again,
+      // and reads their latest results.
+      const step = JSON.parse(mine.spec_json ?? "{}") as Partial<Step>;
+      let inputsJson = mine.inputs_json;
+      if (step.needs?.length) {
+        const runItems = await db.selectFrom("items").selectAll().where("run_id", "=", mine.run_id).execute();
+        if (runItems.some((i) => step.needs!.includes(i.step_id) && !TERMINAL.includes(i.status))) return false;
+        inputsJson = JSON.stringify(collectInputs({ needs: [], inputs: [], ...step } as Step, runItems));
+      }
+      if (mine.lane_id) {
         const holder = await db
           .selectFrom("items")
           .select("id")
@@ -488,7 +518,7 @@ export class Ledger {
       }
       const res = await db
         .updateTable("items")
-        .set({ status: "running", lease_owner: owner, lease_expires_at: now + ttlSeconds * 1000, updated_at: now })
+        .set({ status: "running", lease_owner: owner, lease_expires_at: now + ttlSeconds * 1000, updated_at: now, inputs_json: inputsJson })
         .where("id", "=", itemId)
         .where("status", "=", "ready")
         .executeTakeFirst();
@@ -544,7 +574,7 @@ export class Ledger {
       .set({ lease_expires_at: now + ttlSeconds * 1000 })
       .where("id", "=", itemId)
       .where("lease_owner", "=", owner)
-      .where("status", "in", LEASED)
+      .where("status", "in", [...LEASED, ...DECISION_POINT])
       .executeTakeFirst();
     return res.numUpdatedRows > 0n;
   }
@@ -596,6 +626,8 @@ export class Ledger {
         updated_at: Date.now(),
         ...(leaseEnds ? { lease_owner: null, lease_expires_at: null } : {}),
         ...(bumpAttempt ? { attempt: sql<number>`attempt + 1` } : {}),
+        // Leaving a decision point ends any hold on it.
+        ...(DECISION_POINT.includes(to) ? {} : { hold: null }),
       })
       .where("id", "=", itemId)
       .where("status", "in", Array.isArray(from) ? from : [from]);
@@ -727,7 +759,7 @@ export class Ledger {
   // A finished item goes back to Ready for another attempt (or fails when
   // it has none left); its step and run open again. It starts from its
   // lane's current tip, since later items may have built on its commit.
-  private async reopen(db: Kysely<DB>, item: Item, actor: string, reason: string, payload: Record<string, unknown>): Promise<"ready" | "failed"> {
+  private async reopen(db: Kysely<DB>, item: Item, actor: string, reason: string, payload: Record<string, unknown>, type = "retry"): Promise<"ready" | "failed"> {
     const exhausted = item.attempt >= item.max_attempts;
     const to: Status = exhausted ? "failed" : "ready";
     await db
@@ -735,7 +767,7 @@ export class Ledger {
       .set({ status: to, attempt: exhausted ? item.attempt : item.attempt + 1, lane_start: null, lease_owner: null, lease_expires_at: null, updated_at: Date.now() })
       .where("id", "=", item.id)
       .execute();
-    await this.insertEvent(db, item.run_id, item.id, exhausted ? "failed" : "retry", actor, { reason, ...payload });
+    await this.insertEvent(db, item.run_id, item.id, exhausted ? "failed" : type, actor, { reason, ...payload });
     if (!exhausted) {
       await this.insertDecision(db, {
         run_id: item.run_id,
@@ -800,7 +832,7 @@ export class Ledger {
         .set({ ...fields, updated_at: Date.now() })
         .where("id", "=", itemId)
         .where("lease_owner", "=", owner)
-        .where("status", "in", LEASED)
+        .where("status", "in", [...LEASED, ...DECISION_POINT])
         .executeTakeFirst();
       if (res.numUpdatedRows === 0n) throw leaseLost(itemId);
       await this.insertEvent(db, await this.runOf(db, itemId), itemId, type, owner, payload);
@@ -877,6 +909,16 @@ export class Ledger {
         recovered.push(id);
       });
     }
+    // A resolver whose worker died: the decision point is free again.
+    for (const { id } of await this.db.selectFrom("items").select("id").where("status", "in", DECISION_POINT).where("lease_expires_at", "<", now).execute()) {
+      await this.tx(async (db) => {
+        const it = await db.selectFrom("items").selectAll().where("id", "=", id).where("status", "in", DECISION_POINT).where("lease_expires_at", "<", now).executeTakeFirst();
+        if (!it) return;
+        await db.updateTable("items").set({ lease_owner: null, lease_expires_at: null }).where("id", "=", id).execute();
+        await this.insertEvent(db, it.run_id, id, "lease_expired", "patrol", { previousOwner: it.lease_owner, resolver: true });
+      });
+      recovered.push(id);
+    }
     // A lane merge whose worker died goes back to the merge queue.
     const lanes = await this.db.selectFrom("lanes").selectAll().where("status", "=", "merging").where("lease_expires_at", "<", now).execute();
     for (const lane of lanes) {
@@ -910,15 +952,22 @@ export class Ledger {
   }
 
   async latestSubmission(itemId: string, attempt: number): Promise<Result | null> {
-    const row = await this.db
+    const rows = await this.db
       .selectFrom("submissions")
       .select("payload_json")
       .where("item_id", "=", itemId)
       .where("attempt", "=", attempt)
       .where("valid", "=", 1)
       .orderBy("id", "desc")
-      .executeTakeFirst();
-    return row ? (JSON.parse(row.payload_json) as Result) : null;
+      .execute();
+    const row = rows.map((r) => JSON.parse(r.payload_json) as Result & { resolve?: string }).find((r) => !r.resolve);
+    return row ?? null;
+  }
+
+  // The latest valid resolution an autopilot resolver submitted.
+  async latestResolution(itemId: string, attempt: number, kind: "answer" | "gate"): Promise<Record<string, unknown> | null> {
+    const rows = await this.db.selectFrom("submissions").select("payload_json").where("item_id", "=", itemId).where("attempt", "=", attempt).where("valid", "=", 1).orderBy("id", "desc").execute();
+    return rows.map((r) => JSON.parse(r.payload_json) as Record<string, unknown>).find((r) => r.resolve === kind) ?? null;
   }
 
   async addNote(itemId: string, attempt: number, kind: string, author: string, body: string): Promise<void> {
@@ -951,10 +1000,11 @@ export class Ledger {
 
   // ---- people
 
-  async answer(questionId: string, answer: string, actor: string): Promise<{ itemId: string; resumed: boolean }> {
+  async answer(questionId: string, answer: string, actor: string, resolver?: Resolver): Promise<{ itemId: string; resumed: boolean }> {
     return this.tx(async (db) => {
       const q = await db.selectFrom("questions").selectAll().where("id", "=", questionId).executeTakeFirst();
       if (!q) throw new FoundryError("ledger", `no question ${questionId}`, "foundry status");
+      if (resolver) await this.checkResolver(db, q.item_id, resolver);
       if (q.answer !== null) throw new FoundryError("ledger", `${questionId} is already answered ("${q.answer}")`, `foundry status ${q.item_id}`);
       const options = JSON.parse(q.options_json) as string[];
       if (!q.allow_other && !options.includes(answer)) {
@@ -968,12 +1018,12 @@ export class Ledger {
         step_id: item.step_id,
         attempt: q.attempt,
         actor,
-        kind: "decision",
+        kind: resolver?.kind ?? "decision",
         question: q.question,
         choice: answer,
         alternatives: options.filter((o) => o !== answer),
-        rationale: "answered by a person",
-        evidence: [questionId],
+        rationale: resolver?.rationale ?? "answered by a person",
+        evidence: [questionId, ...(resolver?.evidence ?? [])],
       });
       await this.insertEvent(db, item.run_id, item.id, "answered", actor, { question: questionId, answer });
       const open = await db.selectFrom("questions").select("id").where("item_id", "=", item.id).where("answer", "is", null).executeTakeFirst();
@@ -983,21 +1033,23 @@ export class Ledger {
     });
   }
 
-  async gate(itemId: string, actor: string, approve: boolean, comment: string): Promise<void> {
+  async gate(itemId: string, actor: string, approve: boolean, comment: string, resolver?: Resolver): Promise<void> {
     await this.tx(async (db) => {
       const item = await db.selectFrom("items").selectAll().where("id", "=", itemId).executeTakeFirst();
       if (!item) throw new FoundryError("ledger", `no item ${itemId}`, "foundry status");
       if (item.status !== "at_gate") throw new FoundryError("ledger", `${itemId} is ${item.status.replace("_", " ")}, not at a gate`, `foundry status ${itemId}`);
+      if (resolver) await this.checkResolver(db, itemId, resolver);
       await this.insertDecision(db, {
         run_id: item.run_id,
         item_id: itemId,
         step_id: item.step_id,
         attempt: item.attempt,
         actor,
-        kind: "decision",
+        kind: resolver?.kind ?? "decision",
         question: `Approve the "${item.step_id}" output of ${itemId}?`,
         choice: approve ? "approved" : "rejected",
         rationale: comment || (approve ? "approved at the gate" : "rejected at the gate"),
+        evidence: resolver?.evidence ?? [],
       });
       if (approve) {
         await this.insertEvent(db, item.run_id, itemId, "approved", actor, { comment });
@@ -1010,6 +1062,134 @@ export class Ledger {
         await db.insertInto("item_notes").values({ item_id: itemId, attempt: item.attempt, kind: "rejection", author: actor, body: comment, created_at: Date.now() }).execute();
         await this.move(db, itemId, null, actor, "at_gate", "ready", "rejected", { comment }, {}, true);
       }
+    });
+  }
+
+  // ---- autopilot
+
+  // A role may resolve a decision point only while its worker holds the
+  // lease, autopilot is on and nothing has put the point on hold.
+  private async checkResolver(db: Kysely<DB>, itemId: string, r: Resolver) {
+    const item = await db.selectFrom("items").selectAll().where("id", "=", itemId).executeTakeFirstOrThrow();
+    const off = (await db.selectFrom("settings").select("value").where("key", "=", "autopilot").executeTakeFirst())?.value === "off";
+    if (item.lease_owner !== r.owner || item.hold || off) {
+      throw new FoundryError("ledger", `${itemId} is no longer for autopilot to resolve${item.hold ? ` (${item.hold})` : off ? " (autopilot is off)" : ""}`, `foundry status ${itemId}`);
+    }
+  }
+
+  async autopilotOn(): Promise<boolean> {
+    return (await this.db.selectFrom("settings").select("value").where("key", "=", "autopilot").executeTakeFirst())?.value !== "off";
+  }
+
+  // The kill switch. Off: every open decision point of an autopilot run is
+  // put on hold for a person, and new ones are held as they arise. On again
+  // leaves held points with the person.
+  async setAutopilot(on: boolean, actor: string): Promise<string[]> {
+    return this.tx(async (db) => {
+      await db.insertInto("settings").values({ key: "autopilot", value: on ? "on" : "off" }).onConflict((oc) => oc.column("key").doUpdateSet({ value: on ? "on" : "off" })).execute();
+      const runs = await db.selectFrom("runs").select("id").where("mode", "=", "autopilot").where("status", "=", "open").execute();
+      for (const r of runs) await this.insertEvent(db, r.id, null, on ? "autopilot_on" : "autopilot_off", actor, {});
+      if (on) return [];
+      const held: string[] = [];
+      for (const r of runs) {
+        for (const i of await db.selectFrom("items").select("id").where("run_id", "=", r.id).where("status", "in", DECISION_POINT).where("hold", "is", null).execute()) {
+          await this.holdIn(db, i.id, "autopilot was turned off", actor);
+          held.push(i.id);
+        }
+      }
+      return held;
+    });
+  }
+
+  private async holdIn(db: Kysely<DB>, itemId: string, reason: string, actor: string) {
+    await db.updateTable("items").set({ hold: reason, lease_owner: null, lease_expires_at: null, updated_at: Date.now() }).where("id", "=", itemId).execute();
+    await this.insertEvent(db, await this.runOf(db, itemId), itemId, "held", actor, { reason });
+  }
+
+  // This decision point waits for a person.
+  async hold(itemId: string, reason: string, actor: string): Promise<void> {
+    await this.tx((db) => this.holdIn(db, itemId, reason, actor));
+  }
+
+  // Workers take open decision points of autopilot runs with a lease, like
+  // ready items; the status stays Waiting for input or At gate.
+  async claimDecision(owner: string, ttlSeconds: number, runId?: string): Promise<string | null> {
+    return this.tx(async (db) => {
+      const off = (await db.selectFrom("settings").select("value").where("key", "=", "autopilot").executeTakeFirst())?.value === "off";
+      if (off) return null;
+      const now = Date.now();
+      let q = db
+        .selectFrom("items")
+        .innerJoin("runs", "runs.id", "items.run_id")
+        .select(["items.id", "items.run_id"])
+        .where("runs.mode", "=", "autopilot")
+        .where("items.status", "in", DECISION_POINT)
+        .where("items.hold", "is", null)
+        .where((eb) => eb.or([eb("items.lease_owner", "is", null), eb("items.lease_expires_at", "<", now)]));
+      if (runId) q = q.where("items.run_id", "=", runId);
+      const next = await q.orderBy("items.updated_at").orderBy("items.id").executeTakeFirst();
+      if (!next) return null;
+      await db.updateTable("items").set({ lease_owner: owner, lease_expires_at: now + ttlSeconds * 1000 }).where("id", "=", next.id).execute();
+      await this.insertEvent(db, next.run_id, next.id, "resolver_claimed", owner, {});
+      return next.id;
+    });
+  }
+
+  // The resolver ended without resolving; another worker may try again.
+  async releaseDecision(itemId: string, owner: string, reason: string, attempt: number): Promise<void> {
+    await this.tx(async (db) => {
+      await db.updateTable("items").set({ lease_owner: null, lease_expires_at: null }).where("id", "=", itemId).where("lease_owner", "=", owner).execute();
+      await this.insertEvent(db, await this.runOf(db, itemId), itemId, "resolver_failed", owner, { reason, attempt });
+    });
+  }
+
+  // `foundry reject-decision`: a new record rejects the old one (records are
+  // never edited), and the item that made it and every item downstream of
+  // it go back to Ready with the comment in their history.
+  async rejectDecision(decisionId: string, actor: string, comment: string): Promise<{ rejection: string; requeued: string[] }> {
+    return this.tx(async (db) => {
+      const d = await db.selectFrom("decisions").selectAll().where("id", "=", decisionId).executeTakeFirst();
+      if (!d) throw new FoundryError("ledger", `no decision ${decisionId}`, "foundry decisions");
+      if (d.kind === "control") throw new FoundryError("ledger", `${decisionId} is a control record, which only the kernel writes`, `foundry decisions ${d.run_id}`);
+      const already = await db.selectFrom("decisions").select("id").where("supersedes", "=", decisionId).where("choice", "=", "rejected").executeTakeFirst();
+      if (already) throw new FoundryError("ledger", `${decisionId} is already rejected by ${already.id}`, `foundry decisions ${d.run_id}`);
+      const rejection = await this.insertDecision(db, {
+        run_id: d.run_id,
+        item_id: d.item_id,
+        step_id: d.step_id,
+        actor,
+        kind: "decision",
+        question: `Keep ${decisionId} ("${d.question}" -> "${d.choice}")?`,
+        choice: "rejected",
+        rationale: comment,
+        evidence: [decisionId],
+        supersedes: decisionId,
+      });
+      await this.insertEvent(db, d.run_id, d.item_id, "decision_rejected", actor, { decision: decisionId, rejection, comment });
+      if (!d.item_id) return { rejection, requeued: [] };
+      const items = await db.selectFrom("items").selectAll().where("run_id", "=", d.run_id).execute();
+      const affected = new Set([d.item_id]);
+      for (let grew = true; grew; ) {
+        grew = false;
+        for (const i of items) {
+          if (affected.has(i.id)) continue;
+          if ((JSON.parse(i.inputs_json ?? "[]") as InputRef[]).some((x) => affected.has(x.item))) {
+            affected.add(i.id);
+            grew = true;
+          }
+        }
+      }
+      const note = `${decisionId} ("${d.question}" -> "${d.choice}") was rejected by ${actor}: ${comment}`;
+      const requeued: string[] = [];
+      for (const i of items.filter((i) => affected.has(i.id))) {
+        await db.insertInto("item_notes").values({ item_id: i.id, attempt: i.attempt, kind: "decision_rejected", author: actor, body: note, created_at: Date.now() }).execute();
+        if (i.status !== "done" && i.status !== "skipped") continue;
+        // A re-queued item always gets its attempt, however many it used.
+        if (i.attempt >= i.max_attempts) await db.updateTable("items").set({ max_attempts: i.attempt + 1 }).where("id", "=", i.id).execute();
+        await this.reopen(db, { ...i, max_attempts: Math.max(i.max_attempts, i.attempt + 1) }, actor, `relied on ${decisionId}, which was rejected`, { decision: decisionId }, "requeued");
+        requeued.push(i.id);
+      }
+      return { rejection, requeued };
     });
   }
 
@@ -1079,11 +1259,21 @@ export class Ledger {
     });
   }
 
-  async decisions(filter: { runId?: string; itemId?: string }): Promise<DecisionRecord[]> {
+  async decisions(filter: { runId?: string; itemId?: string; kind?: string }): Promise<DecisionRecord[]> {
     let q = this.db.selectFrom("decisions").selectAll();
     if (filter.runId) q = q.where("run_id", "=", filter.runId);
     if (filter.itemId) q = q.where("item_id", "=", filter.itemId);
+    if (filter.kind) q = q.where("kind", "=", filter.kind as DecisionsTable["kind"]);
     return q.orderBy("created_at").orderBy("id").execute();
+  }
+
+  // Records that a later record rejected or superseded, by id.
+  async decisionStatus(runId?: string): Promise<Map<string, { status: "rejected" | "superseded"; by: string }>> {
+    let q = this.db.selectFrom("decisions").select(["id", "supersedes", "choice"]).where("supersedes", "is not", null);
+    if (runId) q = q.where("run_id", "=", runId);
+    const out = new Map<string, { status: "rejected" | "superseded"; by: string }>();
+    for (const r of await q.orderBy("created_at").orderBy("id").execute()) out.set(r.supersedes!, { status: r.choice === "rejected" ? "rejected" : "superseded", by: r.id });
+    return out;
   }
 
   // ---- reads
@@ -1116,7 +1306,11 @@ export class Ledger {
     if (runId) q = q.where("run_id", "=", runId);
     let lq = this.db.selectFrom("lanes").select("id").where("status", "in", ["merge_ready", "merging"]);
     if (runId) lq = lq.where("run_id", "=", runId);
-    return !!(await q.executeTakeFirst()) || !!(await lq.executeTakeFirst());
+    // Decision points autopilot will resolve are work too.
+    let dq = this.db.selectFrom("items").innerJoin("runs", "runs.id", "items.run_id").select("items.id").where("runs.mode", "=", "autopilot").where("items.status", "in", DECISION_POINT).where("items.hold", "is", null);
+    if (runId) dq = dq.where("items.run_id", "=", runId);
+    const autopilot = (await this.autopilotOn()) && !!(await dq.executeTakeFirst());
+    return !!(await q.executeTakeFirst()) || !!(await lq.executeTakeFirst()) || autopilot;
   }
 
   async events(itemId: string): Promise<LedgerEvent[]> {
@@ -1351,4 +1545,11 @@ async function migrateV3(db: Kysely<DB>) {
       .execute();
     await db.updateTable("items").set({ lane_id: i.id }).where("id", "=", i.id).execute();
   }
+}
+
+// Phase 2: run mode, holds for a person, the autopilot switch.
+async function migrateV4(db: Kysely<DB>) {
+  await db.schema.alterTable("runs").addColumn("mode", "text").execute();
+  await db.schema.alterTable("items").addColumn("hold", "text").execute();
+  await db.schema.createTable("settings").addColumn("key", "text", (c) => c.primaryKey()).addColumn("value", "text", (c) => c.notNull()).execute();
 }

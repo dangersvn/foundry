@@ -42,3 +42,28 @@ export type Questions = z.infer<typeof Questions>;
 export function formatIssues(e: z.ZodError): string {
   return e.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
 }
+
+// Evidence an autopilot resolver cites. The kernel checks that each one
+// resolves: the run's request, an approved artifact, a file in the
+// workspace, or a decision record.
+export const Citation = z.object({
+  kind: z.enum(["request", "artifact", "context", "decision"]),
+  ref: z.string().optional(), // artifact or file path, or DEC-n
+  quote: z.string().optional(), // for request: words that appear in it
+});
+export type Citation = z.infer<typeof Citation>;
+
+// What the answerer submits for a question, and the reviewer for a gate.
+export const AnswerResolution = z.object({
+  answers: z
+    .array(z.object({ question: z.string().min(1), answer: z.string().min(1), rationale: z.string().min(1), evidence: z.array(Citation).default([]) }))
+    .min(1),
+});
+export const GateResolution = z.object({
+  verdict: z.enum(["approve", "reject"]),
+  comment: z.string().min(1),
+  findings: z.array(z.string()).default([]),
+  evidence: z.array(Citation).default([]),
+});
+export type AnswerResolution = z.infer<typeof AnswerResolution>;
+export type GateResolution = z.infer<typeof GateResolution>;

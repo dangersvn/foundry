@@ -20,6 +20,11 @@
 // An action may write files, ask, note, hand off and submit (an object, or
 // "no-decisions" for a result missing its decisions list). When the envelope
 // asks for a submission and the action names none, a plain "done" is sent.
+// An autopilot resolver session uses "<step>:answer" or "<step>:gate"; its
+// action's "resolve" is the resolution ({"answer": "SQLite", "evidence":
+// [...]} for every open question, or {"verdict": "reject", "comment": ...}).
+// Without one it answers the first option, or approves, citing the request.
+// "delay_ms" makes an action wait before it acts.
 // "{item}", "{unit}" and "{attempt}" are filled from the envelope.
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -38,6 +43,8 @@ const { values: opts } = parseArgs({
 const style = opts.style === "claude" ? "claude" : "kiro";
 
 interface Action {
+  resolve?: Record<string, unknown>;
+  delay_ms?: number;
   writes?: { path: string; content: string }[];
   ask?: { question: string; options: string[] };
   note?: string;
@@ -141,8 +148,9 @@ async function work(sessionId: string, text: string, fillItem: (s: string) => st
   const attempt = Number(field("attempt") ?? "1");
   const unit = field("unit") ?? "";
   const review = /^role: \S+ \(reviewing/m.test(text);
+  const resolve = field("resolve");
   const fill = (s: string) => fillItem(s).replaceAll("{unit}", unit).replaceAll("{attempt}", String(attempt));
-  const base = review ? `${stepId}:review` : stepId;
+  const base = resolve ? `${stepId}:${resolve}` : review ? `${stepId}:review` : stepId;
   const key = [unit ? `${base}(${unit})` : "", base].find((k) => k && plan.steps?.[k]);
   const script = key ? plan.steps![key] : undefined;
   const action: Action = script ? script[Math.min(attempt, script.length) - 1]! : plan.steps ? {} : plan;
@@ -157,6 +165,20 @@ async function work(sessionId: string, text: string, fillItem: (s: string) => st
     });
   };
 
+  if (action.delay_ms) await sleep(action.delay_ms);
+  if (resolve) {
+    const r = action.resolve ?? {};
+    const evidence = (r.evidence as unknown[]) ?? [{ kind: "request" }];
+    const questions = [...text.matchAll(/^ {2}- id: (Q-\d+)\n {4}question: .*\n {4}options: (.*?)( {3}#.*)?$/gm)].map((m) => ({ id: m[1]!, first: (JSON.parse(m[2]!) as string[])[0]! }));
+    const resolution =
+      resolve === "answer"
+        ? { answers: questions.map((q) => ({ question: q.id, answer: (r.answer as string) ?? q.first, rationale: (r.rationale as string) ?? "the request settles it", evidence })) }
+        : { verdict: r.verdict ?? "approve", comment: r.comment ?? "does what the request asks", findings: r.findings ?? [], evidence };
+    await toolCall(sessionId, "edit", { path: ".foundry/resolution.json" }, () => writeFile(".foundry/resolution.json", JSON.stringify(resolution)));
+    await foundry("submit", "--file", ".foundry/resolution.json");
+    await say(sessionId, "Resolved.");
+    return;
+  }
   for (const w of action.writes ?? []) await toolCall(sessionId, "edit", { path: fill(w.path) }, () => writeFile(fill(w.path), fill(w.content)));
   if (action.note) await foundry("note", fill(action.note));
   if (action.handoff) await foundry("handoff", fill(action.handoff));

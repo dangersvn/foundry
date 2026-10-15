@@ -14,6 +14,9 @@ export interface PackSpec {
   steps: Record<string, unknown>[];
   plan: Record<string, Record<string, unknown>[]>;
   workers: number;
+  agents?: string[]; // fake agents by name, each in its own style (kiro or claude)
+  config?: string; // more foundry.toml
+  delayMs?: number;
 }
 export type W = FoundryWorld & { pack?: PackSpec; packDir?: string; runId?: string };
 
@@ -133,23 +136,33 @@ Given("two {string} items change the same lines of the same file", function (thi
 // ---- running
 
 export async function startRun(w: W, ...extra: string[]) {
+  const dir = writePack(w);
+  w.mainBefore = w.git("rev-parse", "main");
+  w.result = await w.foundry("run", dir, ...extra);
+  w.runId = w.result.stdout.match(/(RUN-\d+) created/)?.[1];
+  assert.ok(w.runId, w.result.stdout + w.result.stderr);
+}
+
+// Writes the test pack, the fake agent's plan and foundry.toml; returns the pack folder.
+export function writePack(w: W): string {
   const dir = path.join(w.dir, "three-step");
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(path.join(dir, "roles"), { recursive: true });
   fs.writeFileSync(path.join(dir, "pack.toml"), stringify({ name: "three-step", version: "1" }));
   fs.writeFileSync(path.join(dir, "formula.toml"), stringify({ formula: "three-step", version: 1, title: "three steps", verify: "npm test", steps: w.pack!.steps }));
-  for (const role of ["architect", "developer", "qa", "reviewer"]) {
+  for (const role of ["architect", "developer", "qa", "reviewer", "answerer"]) {
     fs.writeFileSync(path.join(dir, "roles", `${role}.md`), `You are the ${role}.\n`);
     fs.writeFileSync(path.join(dir, "roles", `${role}.toml`), stringify({ role, prompt: `roles/${role}.md` }));
   }
   const plan = path.join(w.dir, "plan.json");
   fs.writeFileSync(plan, JSON.stringify({ steps: w.pack!.plan }));
-  w.writeConfig({ fake: fakeAgentCommand("--plan", plan, "--delay-ms", "200") }, `\n[leases]\nttl_seconds = 5\n[workers]\ncount = ${w.pack!.workers}\n`);
+  const delay = String(w.pack!.delayMs ?? 200);
+  const agents = Object.fromEntries(
+    (w.pack!.agents ?? ["fake"]).map((name) => [name, fakeAgentCommand("--plan", plan, "--delay-ms", delay, "--style", name === "claude" ? "claude" : "kiro")]),
+  );
+  w.writeConfig(agents, `\n[leases]\nttl_seconds = 5\n[workers]\ncount = ${w.pack!.workers}\n${w.pack!.config ?? ""}`);
   w.packDir = dir;
-  w.mainBefore = w.git("rev-parse", "main");
-  w.result = await w.foundry("run", dir, ...extra);
-  w.runId = w.result.stdout.match(/(RUN-\d+) created/)?.[1];
-  assert.ok(w.runId, w.result.stdout + w.result.stderr);
+  return dir;
 }
 
 When("I start a run of {string}", { timeout: 180_000 }, async function (this: W, _name: string) {

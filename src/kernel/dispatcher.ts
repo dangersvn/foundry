@@ -13,6 +13,7 @@ import { DEFAULT_ROLE, loadPack, type Pack } from "../schemas/pack.js";
 import type { Result } from "../schemas/result.js";
 import { AgentStartError, runAgent } from "../runtime/acp.js";
 import { RENDERED_PATHS, renderRole } from "../runtime/render.js";
+import { holdReason, lockedFiles, resolveItem } from "./autopilot.js";
 import { BUILTIN_CHECKS } from "./checks.js";
 import { buildEnvelope } from "./envelope.js";
 import { FoundryError } from "./errors.js";
@@ -32,7 +33,7 @@ export interface Workspace {
 }
 
 export type Outcome =
-  | { status: "done" | "skipped" | "merge_ready" | "at_gate" | "waiting_input"; itemId: string; commit?: string }
+  | { status: "done" | "skipped" | "merge_ready" | "at_gate" | "waiting_input" | "resolved" | "held"; itemId: string; commit?: string }
   | { status: "retry" | "failed" | "unavailable"; itemId: string; error: FoundryError };
 
 export const workerId = () => `${os.hostname()}:${process.pid}`;
@@ -43,6 +44,7 @@ export interface ItemHandle {
   attempt: number;
   ledger: string;
   review: boolean;
+  resolve?: "answer" | "gate"; // an autopilot resolver session
 }
 
 // One git-mutating section at a time within this process.
@@ -54,7 +56,7 @@ function serialized<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 const packCache = new Map<string, Pack>();
-function packOf(run: Run): Pack | null {
+export function packOf(run: Run): Pack | null {
   if (!run.pack_dir) return null;
   if (!packCache.has(run.pack_dir)) packCache.set(run.pack_dir, loadPack(run.pack_dir));
   return packCache.get(run.pack_dir)!;
@@ -78,6 +80,7 @@ export async function processItem(ws: Workspace, itemId: string): Promise<Outcom
   const item = (await ledger.getItem(itemId))!;
   const run = (await ledger.getRun(item.run_id))!;
   const step = JSON.parse(item.spec_json!) as Step;
+  const autopilot = run.mode === "autopilot";
 
   // Send the item back for another attempt, with the reason in its history.
   const sendBack = async (noteKind: string, error: FoundryError, extra: Record<string, unknown> = {}): Promise<Outcome> => {
@@ -131,7 +134,8 @@ export async function processItem(ws: Workspace, itemId: string): Promise<Outcom
       // A question ends the session; the item waits for a person.
       const open = (await ledger.questions(itemId)).filter((q) => q.attempt === item.attempt && q.answer === null);
       if (open.length) {
-        await ledger.transition(itemId, owner, "running", "waiting_input", "waiting_for_input", { questions: open.map((q) => q.id) });
+        const hold = autopilot && !(await ledger.autopilotOn()) ? "autopilot is off" : null;
+        await ledger.transition(itemId, owner, "running", "waiting_input", "waiting_for_input", { questions: open.map((q) => q.id), ...(hold ? { hold } : {}) }, { hold });
         out(`${itemId} waiting for input: ${open.map((q) => `${q.id} "${q.question}"`).join(", ")}`);
         return { status: "waiting_input", itemId };
       }
@@ -202,7 +206,15 @@ export async function processItem(ws: Workspace, itemId: string): Promise<Outcom
       }
     }
 
-    if (step.review && step.type === "agent") {
+    // In autopilot a change to a locked path stops at a gate even where the
+    // step has none, and some gates must wait for a person.
+    const locked = autopilot && commit ? lockedFiles(await git.changedFiles(wt.path, wt.base, commit), ws.config.autopilot.locked_paths) : [];
+    const gated = !!step.gate || step.environment_change || locked.length > 0;
+    const hold = autopilot && gated ? await holdReason(ws, step, locked) : null;
+    // A gate the step's reviewer resolves in autopilot needs no separate
+    // advisory review first.
+    const reviewerResolves = autopilot && gated && !hold && !!step.review;
+    if (step.review && step.type === "agent" && !reviewerResolves) {
       out(`${itemId} review by ${step.review}`);
       try {
         await runSession(ws, item, run, step, wt, agent, true, lost.signal);
@@ -217,9 +229,10 @@ export async function processItem(ws: Workspace, itemId: string): Promise<Outcom
     checkLease();
 
     const fields = { result_json: result ? JSON.stringify(result) : null, commit_sha: commit };
-    if (step.gate || step.environment_change) {
-      await ledger.transition(itemId, owner, "verifying", "at_gate", "at_gate", { commit, environmentChange: step.environment_change }, fields);
-      out(`${itemId} at gate: approve with \`foundry approve ${itemId}\` or reject with \`foundry reject ${itemId} --comment "..."\``);
+    if (gated) {
+      await ledger.transition(itemId, owner, "verifying", "at_gate", "at_gate", { commit, environmentChange: step.environment_change, ...(locked.length ? { locked } : {}), ...(hold ? { hold } : {}) }, { ...fields, hold });
+      if (!autopilot || hold) out(`${itemId} at gate${hold ? ` (waits for a person: ${hold})` : ""}: approve with \`foundry approve ${itemId}\` or reject with \`foundry reject ${itemId} --comment "..."\``);
+      else out(`${itemId} at gate; autopilot resolves it`);
       return { status: "at_gate", itemId };
     }
     if ((await ledger.laneRoute(itemId)) === "commit") {
@@ -245,35 +258,26 @@ export async function processItem(ws: Workspace, itemId: string): Promise<Outcom
   }
 }
 
-// One agent session in the item's worktree: render the role, write the
-// envelope and the item handle, run the turn.
-async function runSession(ws: Workspace, item: Item, run: Run, step: Step, wt: git.Worktree, agent: string, review: boolean, signal: AbortSignal) {
-  const { ledger, owner, out } = ws;
-  const pack = packOf(run);
-  const roleName = review ? step.review! : step.role;
-  const role = pack?.roles.get(roleName);
-  const params = JSON.parse(run.params_json ?? "{}") as Record<string, string>;
-
-  // Knowledge is copied under the worktree's excluded .foundry/, so reading it
-  // never leaves the worktree.
+// Knowledge and step context are copied under the worktree's excluded
+// .foundry/, so reading them never leaves the worktree. Returns their paths
+// relative to the worktree.
+export function copyContext(pack: Pack | null, files: string[], wt: string): string[] {
   const context: string[] = [];
-  for (const k of role?.knowledge ?? []) {
-    const dest = path.join(wt.path, ".foundry", "pack", k);
+  for (const k of files) {
+    const rel = path.join(".foundry", "pack", k);
+    if (context.includes(rel) || !pack?.dir) continue;
+    const dest = path.join(wt, rel);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.copyFileSync(path.join(pack!.dir!, k), dest);
-    context.push(path.join(".foundry", "pack", k));
+    fs.copyFileSync(path.join(pack.dir, k), dest);
+    context.push(rel);
   }
-  for (const k of review ? [] : step.context) {
-    if (context.includes(path.join(".foundry", "pack", k))) continue;
-    const dest = path.join(wt.path, ".foundry", "pack", k);
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.copyFileSync(path.join(pack!.dir!, k), dest);
-    context.push(path.join(".foundry", "pack", k));
-  }
-  if (fs.existsSync(path.join(wt.path, "AGENTS.md"))) context.push("AGENTS.md");
+  if (fs.existsSync(path.join(wt, "AGENTS.md"))) context.push("AGENTS.md");
+  return context;
+}
 
-  // Layered rules, general to specific: a team's own file for a layer
-  // (foundry.toml [rules]) replaces the pack's default for that layer.
+// Layered rules, general to specific: a team's own file for a layer
+// (foundry.toml [rules]) replaces the pack's default for that layer.
+export function layeredRules(ws: Workspace, pack: Pack | null): { layer: string; text: string }[] {
   const rules: { layer: string; text: string }[] = [];
   for (const layer of ["org", "team", "project"] as const) {
     const own = ws.config.rules[layer] ? path.resolve(ws.repo, ws.config.rules[layer]!) : null;
@@ -281,9 +285,20 @@ async function runSession(ws: Workspace, item: Item, run: Run, step: Step, wt: g
     const file = [own, packDefault].find((f) => f && fs.existsSync(f));
     if (file) rules.push({ layer, text: fs.readFileSync(file, "utf8") });
   }
+  return rules;
+}
 
+// One agent session in the item's worktree: render the role, write the
+// envelope and the item handle, run the turn.
+async function runSession(ws: Workspace, item: Item, run: Run, step: Step, wt: git.Worktree, agent: string, review: boolean, signal: AbortSignal) {
+  const { ledger } = ws;
+  const pack = packOf(run);
+  const roleName = review ? step.review! : step.role;
+  const role = pack?.roles.get(roleName);
+  const params = JSON.parse(run.params_json ?? "{}") as Record<string, string>;
+  const context = copyContext(pack, [...(role?.knowledge ?? []), ...(review ? [] : step.context)], wt.path);
   const inputs = JSON.parse(item.inputs_json ?? "[]") as InputRef[];
-  const inputDecisions = (await Promise.all(inputs.map((i) => ledger.decisions({ itemId: i.item })))).flat().filter((d) => d.kind !== "control");
+  const inputDecisions = await activeDecisions(ledger, inputs.map((i) => i.item));
   const envelope = buildEnvelope({
     item,
     run,
@@ -298,53 +313,96 @@ async function runSession(ws: Workspace, item: Item, run: Run, step: Step, wt: g
     questions: await ledger.questions(item.id),
     runItems: await ledger.listItems(run.id),
     context,
-    rules,
+    rules: layeredRules(ws, pack),
     params,
     fullVerify: (JSON.parse(run.formula_json!) as { verify?: string }).verify,
     review,
   });
+  await launchSession(ws, {
+    item,
+    run,
+    roleName,
+    wt,
+    agent,
+    envelope,
+    tag: `${item.id}-a${item.attempt}${review ? "-review" : ""}`,
+    handle: { item: item.id, attempt: item.attempt, ledger: path.join(ws.stateDir, "foundry.db"), review },
+    tools: review ? ["read", "shell"] : undefined,
+    eventPrefix: review ? "review_" : "",
+    context,
+    signal,
+  });
+}
 
-  const fdir = path.join(wt.path, ".foundry");
+// The non-control decisions of these items that no later record rejected
+// or superseded.
+export async function activeDecisions(ledger: Ledger, itemIds: string[]) {
+  const status = await ledger.decisionStatus();
+  return (await Promise.all(itemIds.map((id) => ledger.decisions({ itemId: id })))).flat().filter((d) => d.kind !== "control" && !status.has(d.id));
+}
+
+export interface SessionSpec {
+  item: Item;
+  run: Run;
+  roleName: string;
+  wt: { path: string; branch: string };
+  agent: string;
+  envelope: string;
+  tag: string; // names the envelope and transcript files
+  handle: ItemHandle;
+  tools?: ("read" | "write" | "shell")[];
+  eventPrefix: string; // "" for the item's own session, "review_", "resolver_", ...
+  context: string[];
+  signal?: AbortSignal;
+  stateDir?: string; // where envelopes and transcripts go (default ws.stateDir)
+  ledger?: Ledger; // the ledger its events go to (default ws.ledger)
+}
+
+export async function launchSession(ws: Workspace, spec: SessionSpec) {
+  const { owner, out } = ws;
+  const ledger = spec.ledger ?? ws.ledger;
+  const stateDir = spec.stateDir ?? ws.stateDir;
+  const pack = packOf(spec.run);
+  const role = pack?.roles.get(spec.roleName);
+  const fdir = path.join(spec.wt.path, ".foundry");
   fs.mkdirSync(path.join(fdir, "bin"), { recursive: true });
-  const handle: ItemHandle = { item: item.id, attempt: item.attempt, ledger: path.join(ws.stateDir, "foundry.db"), review };
-  fs.writeFileSync(path.join(fdir, "item.json"), JSON.stringify(handle, null, 2) + "\n");
+  fs.writeFileSync(path.join(fdir, "item.json"), JSON.stringify(spec.handle, null, 2) + "\n");
   const wrapper = path.join(fdir, "bin", "foundry");
   fs.writeFileSync(wrapper, `#!/bin/sh\nexec ${ws.selfCommand.map((a) => `'${a.replaceAll("'", "'\\''")}'`).join(" ")} "$@"\n`);
   fs.chmodSync(wrapper, 0o755);
-  fs.rmSync(path.join(fdir, "result.json"), { force: true });
+  for (const f of ["result.json", "resolution.json"]) fs.rmSync(path.join(fdir, f), { force: true });
 
-  const tag = `${item.id}-a${item.attempt}${review ? "-review" : ""}`;
-  const envelopePath = path.join(ws.stateDir, "envelopes", `${tag}.md`);
+  const envelopePath = path.join(stateDir, "envelopes", `${spec.tag}.md`);
   fs.mkdirSync(path.dirname(envelopePath), { recursive: true });
-  fs.writeFileSync(envelopePath, envelope);
-  await ledger.addArtifact(item.id, "envelope", envelopePath);
+  fs.writeFileSync(envelopePath, spec.envelope);
+  await ledger.addArtifact(spec.item.id, "envelope", envelopePath);
 
-  const cfg = ws.config.agents[agent]!;
+  const cfg = ws.config.agents[spec.agent]!;
   const rendered =
-    role || roleName !== DEFAULT_ROLE
-      ? renderRole(cfg.render, wt.path, {
-          name: roleName,
+    role || spec.roleName !== DEFAULT_ROLE
+      ? renderRole(cfg.render, spec.wt.path, {
+          name: spec.roleName,
           description: role?.description ?? "",
           prompt: role?.promptText ?? "",
-          knowledge: context,
-          tools: review ? ["read", "shell"] : (role?.tools_allowed ?? ["read", "write", "shell"]),
+          knowledge: spec.context,
+          tools: spec.tools ?? role?.tools_allowed ?? ["read", "write", "shell"],
         })
       : { args: [], files: [] };
 
-  const transcriptPath = path.join(ws.stateDir, "transcripts", `${tag}.jsonl`);
+  const transcriptPath = path.join(stateDir, "transcripts", `${spec.tag}.jsonl`);
   fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
-  await ledger.addArtifact(item.id, "transcript", transcriptPath);
+  await ledger.addArtifact(spec.item.id, "transcript", transcriptPath);
   await runAgent({
-    agent,
+    agent: spec.agent,
     command: [...cfg.command, ...rendered.args],
-    cwd: wt.path,
-    prompt: envelope,
+    cwd: spec.wt.path,
+    prompt: spec.envelope,
     transcriptPath,
-    signal,
+    signal: spec.signal,
     onEvent: async (e) => {
       const { type, ...payload } = e;
-      await ledger.record(item.id, owner, review ? `review_${type}` : type, { ...payload, ...(type === "agent_started" ? { role: roleName, envelope: envelopePath } : {}) });
-      out(describeEvent(item.id, e));
+      await ledger.record(spec.item.id, owner, `${spec.eventPrefix}${type}`, { ...payload, ...(type === "agent_started" ? { role: spec.roleName, envelope: envelopePath } : {}) });
+      out(describeEvent(spec.item.id, e));
     },
   });
 }
@@ -549,6 +607,11 @@ export async function workQueue(
       continue;
     }
     await sweepMerged(ws);
+    const decisionId = await ws.ledger.claimDecision(ws.owner, ttl, opts.runId);
+    if (decisionId) {
+      worked.push(await resolveItem(ws, decisionId));
+      continue;
+    }
     const itemId = await ws.ledger.claimNext(ws.owner, ttl, opts.runId);
     if (itemId) {
       const item = (await ws.ledger.getItem(itemId))!;

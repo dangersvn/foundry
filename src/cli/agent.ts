@@ -7,7 +7,7 @@ import { parseArgs } from "node:util";
 import type { ItemHandle } from "../kernel/dispatcher.js";
 import { FoundryError } from "../kernel/errors.js";
 import { Ledger } from "../kernel/ledger.js";
-import { formatIssues, Questions, Result } from "../schemas/result.js";
+import { AnswerResolution, formatIssues, GateResolution, Questions, Result } from "../schemas/result.js";
 
 function findHandle(): ItemHandle {
   for (let dir = process.cwd(); ; dir = path.dirname(dir)) {
@@ -24,7 +24,9 @@ async function withItem<T>(fn: (h: ItemHandle, l: Ledger) => Promise<T>): Promis
   const ledger = await Ledger.open(h.ledger);
   try {
     const item = await ledger.getItem(h.item);
-    if (!item || item.attempt !== h.attempt || !["running", "verifying"].includes(item.status)) {
+    // A resolver works on a decision point; everyone else on a running item.
+    const active = h.resolve ? (h.resolve === "answer" ? ["waiting_input"] : ["at_gate"]) : ["running", "verifying"];
+    if (!item || item.attempt !== h.attempt || !active.includes(item.status)) {
       throw new FoundryError("agent", `${h.item} attempt ${h.attempt} is no longer active (status ${item?.status ?? "unknown"})`, "end your turn");
     }
     return await fn(h, ledger);
@@ -45,6 +47,20 @@ export async function cmdSubmit(args: string[]): Promise<number> {
       await ledger.note(h.item, "submission_rejected", "agent", { errors: `not readable JSON: ${(e as Error).message}` });
       console.error(`rejected: ${values.file} is not readable JSON: ${(e as Error).message}`);
       return 1;
+    }
+    if (h.resolve) {
+      const r = (h.resolve === "answer" ? AnswerResolution : GateResolution).safeParse(raw);
+      if (!r.success) {
+        const errors = formatIssues(r.error);
+        await ledger.addSubmission(h.item, h.attempt, false, { resolve: h.resolve, raw, errors });
+        await ledger.note(h.item, "submission_rejected", "agent", { errors });
+        console.error(`rejected, fix and submit again: ${errors}`);
+        return 1;
+      }
+      await ledger.addSubmission(h.item, h.attempt, true, { resolve: h.resolve, ...r.data });
+      await ledger.note(h.item, "resolution_submitted", "agent", { kind: h.resolve });
+      console.log("accepted. End your turn now; Foundry checks your evidence and applies the resolution.");
+      return 0;
     }
     const parsed = Result.safeParse(raw);
     if (!parsed.success) {
