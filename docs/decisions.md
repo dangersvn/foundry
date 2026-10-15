@@ -625,3 +625,100 @@ Each entry gives what was decided, the options, the choice and the reason.
 ## D65. Human stops and metrics
 - `foundry status RUN-n` in autopilot adds the number of holds (human stops)
   and assumptions; resolver sessions count as agent sessions.
+
+## D66. Benchmark cases (2c)
+- `foundry bench add WI-n` takes a `done` item with a merged commit on main
+  (found by its `Foundry-Item` trailer) and writes `benchmarks/<case>/`:
+  `case.json` (source, base commit, the envelope as data, verifier setup,
+  accepted summary and files, split), `accepted.patch` and the original
+  `envelope.md`. The base commit is the parent of the accepted commit; a ref
+  `refs/foundry/bench/<case>` keeps it alive.
+- "Its envelope" is frozen as data, not text: the request, inputs, input
+  decisions and the history the accepted attempt saw (questions and answers,
+  rejections, notes from earlier attempts). The role prompt, step
+  instructions and rules come from the pack being evaluated at replay time;
+  otherwise a prompt change could never show up in an eval.
+- The verifier setup is frozen from the item's run: the step's verify, else
+  the formula's, else `[project] test_command`, plus the step's pack checks.
+  A step with `docs_only` or no verify command is graded as documents.
+- The case id is `<step>[-<unit>]-<8 hex>` from a hash of formula, step,
+  unit, request and title, so the same item gets the same id (and split) in
+  any setup; the split is `dev` when a hash of the id mod 100 is below 70,
+  else `held-out`. Adding the same item twice is refused.
+- `foundry bench add` writes the files but does not commit them: the
+  benchmark is a person's to commit.
+
+## D67. benchmarks/ is a protected path
+- The refinery (any lane merge) refuses a change that touches `benchmarks/`
+  and sends it back naming the path and the files, like a conflict.
+- Replay worktrees have `benchmarks/` removed before the role starts, so a
+  case's accepted output can never leak into its own trial.
+
+## D68. Replays have their own ledger
+- What: a trial needs a ledger item (agents `submit` to one) but must not
+  count as factory work in `foundry stats`.
+- Choice: `.foundry/evals/evals.db`, a ledger of its own with one
+  single-step run per trial (no needs, fan-out, gate or review; one
+  attempt). Envelopes and transcripts go to `.foundry/evals/`, and each
+  trial's worktree is `.foundry/evals/worktrees/<item>` (detached at the
+  base commit, removed after grading; `foundry gc` never touches it).
+- A trial fails if the role asks a question (no one to answer), submits
+  nothing valid or skips. Code: the frozen verify command decides.
+  Documents: every frozen sensor must pass (advisory or not), then a judge.
+
+## D69. The judge
+- The judge is the step's reviewer role, else the pack's reviewer, on the
+  first configured agent other than the trial's agent. It reads the trial's
+  files and the accepted patch and submits four booleans (goal, inputs,
+  grounded, complete) with a comment through `foundry submit`; the trial
+  passes only when all four are true.
+- **Assumption:** a four-criterion all-or-nothing rubric is strict enough to
+  separate versions and simple enough for an agent to apply consistently.
+
+## D70. `foundry eval` and `foundry replay`
+- `foundry eval A B` takes two pack folders with the same pack name (a
+  version is a folder: copy `packs/aidlc` to `packs/aidlc-b` and edit it).
+  `--set` defaults to `dev` (iterate on dev; confirm on held-out); `all` is
+  allowed. `--trials` defaults to 3. Cases are those whose pack name matches.
+  Both versions run on the first configured agent.
+- Verdict exactly as the brief: B is better if its total passes are higher
+  and no case loses passes.
+- `--agents a,b` replays every case with one pack on each agent and reports
+  passes per role.
+- Cost guard: both commands print how many agent sessions they would start
+  (trials x variants per case, plus a judge per document trial) and exit
+  with an error naming `--yes` without it.
+- Each eval writes a JSON report to `.foundry/evals/reports/`.
+- Trials run one after another. **Assumption:** speed matters less than
+  simple, comparable runs in v2.
+
+## D71. `foundry stats`
+- From the event log of the factory's ledger (replays excluded), grouped by
+  role (from the run's pinned formula), agent (from `agent_started`) or step:
+  first-pass yield (items not skipped whose first attempt reached a gate,
+  the merge queue or a lane commit), attempts per item (claims), human
+  rejection rate (gate rejections by people over their gate decisions),
+  agent requests per merged item (tool calls and permission requests,
+  including review and resolver sessions, over items that merged or
+  committed on a lane), escalation rate (items that failed after their
+  attempts, as the spec defines it) and assumptions (from the decision log).
+
+## D72. Hidden tests for code cases
+- What: a replayed feature step is graded by `npm test`, which was already
+  green at the base commit, so a trial that does nothing would pass.
+- Choice: `bench add` keeps the test files the accepted change added or
+  changed (paths under `test/`, `tests/`, `__tests__/`, `spec/`, or named
+  `*.test.*`, `*.spec.*`, `*_test.*`, `test_*.py`) in
+  `benchmarks/<case>/tests/`, and every code trial gets them copied in,
+  replacing its own versions, just before the frozen verify. The role never
+  sees them.
+- **Assumption:** this is part of "its verifier setup" (beyond the brief's
+  wording). Without it only bugfix cases, whose tests fail at the base
+  commit, would separate good from bad trials.
+
+## D73. One pack is a baseline eval
+- What: the 2d baseline is recorded "with `foundry eval`", which compares
+  two packs.
+- Choice: `foundry eval <pack>` replays every case with that one pack and
+  prints passes per case and per step (the baseline), under the same cost
+  guard. Two packs compare; `--agents` compares agents.

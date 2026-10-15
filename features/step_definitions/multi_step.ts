@@ -51,7 +51,11 @@ export const envelope = (w: W, id: string, attempt: number) => fs.readFileSync(p
 const ts = (events: LedgerEvent[], type: string) => events.find((e) => e.type === type)?.ts;
 
 Given("the test pack {string} with steps {string}, {string} and {string}", function (this: W, _name: string, a: string, b: string, c: string) {
-  this.pack = {
+  threeStep(this, a, b, c);
+});
+
+export function threeStep(w: W, a = "design", b = "build", c = "check") {
+  w.pack = {
     workers: 3,
     steps: [
       { id: a, role: "architect", goal: "Design the change and list the units to build." },
@@ -64,7 +68,7 @@ Given("the test pack {string} with steps {string}, {string} and {string}", funct
       [c]: [{}],
     },
   };
-});
+}
 
 const step = (w: W, id: string) => w.pack!.steps.find((s) => s.id === id)!;
 

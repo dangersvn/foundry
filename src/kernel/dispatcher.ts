@@ -44,7 +44,7 @@ export interface ItemHandle {
   attempt: number;
   ledger: string;
   review: boolean;
-  resolve?: "answer" | "gate"; // an autopilot resolver session
+  resolve?: "answer" | "gate" | "judge"; // an autopilot resolver, or an eval judge
 }
 
 // One git-mutating section at a time within this process.
@@ -407,6 +407,9 @@ export async function launchSession(ws: Workspace, spec: SessionSpec) {
   });
 }
 
+// Paths the refinery never merges from an agent (brief 2c).
+export const PROTECTED_PATHS = ["benchmarks/"];
+
 // What the refinery does to land a lane: rebase it onto the target, run the
 // full verify (documents only: skipped), fast-forward the target.
 class LandError extends FoundryError {
@@ -426,6 +429,11 @@ async function land(
   const target = await git.targetBranch(ws.repo);
   const head = await git.rebaseOnto(wt, target);
   const changed = await git.changedFiles(wt, target, head);
+  // Protected paths change only by a person's own commit, never by an agent's.
+  const touched = changed.filter((f) => PROTECTED_PATHS.some((p) => f.startsWith(p)));
+  if (touched.length) {
+    throw new FoundryError("git", `the change touches the protected path ${PROTECTED_PATHS.join(", ")} (${touched.join(", ")}); agents may not change the benchmark`, `foundry status ${ref}; remove those files from the change`);
+  }
   const docsOnly = changed.length > 0 && changed.every((f) => ws.config.project.docs_paths.some((p) => f.startsWith(p)));
   if (fullVerify && docsOnly) {
     await record("merge_verify_skipped", { reason: "the change only touches documentation paths", files: changed.length });

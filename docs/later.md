@@ -48,3 +48,9 @@ Ideas for later phases, kept out of v0 code.
 - Parallel document steps: the docs lane runs one item at a time (D52); a
   lane per document step with a merge of their artifacts at the end would
   bring the parallelism back.
+- Pack versions by git ref (`foundry eval packs/aidlc@HEAD~1 packs/aidlc`)
+  instead of folder copies.
+- Parallel eval trials (they run one after another today).
+- `foundry reject-decision` re-runs everything downstream; a re-run that
+  skips work the decision did not reach would be cheaper.
+- Per-run autopilot switches (the kill switch is workspace-wide).

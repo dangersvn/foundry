@@ -7,7 +7,7 @@ import { parseArgs } from "node:util";
 import type { ItemHandle } from "../kernel/dispatcher.js";
 import { FoundryError } from "../kernel/errors.js";
 import { Ledger } from "../kernel/ledger.js";
-import { AnswerResolution, formatIssues, GateResolution, Questions, Result } from "../schemas/result.js";
+import { AnswerResolution, formatIssues, GateResolution, JudgeResult, Questions, Result } from "../schemas/result.js";
 
 function findHandle(): ItemHandle {
   for (let dir = process.cwd(); ; dir = path.dirname(dir)) {
@@ -25,7 +25,7 @@ async function withItem<T>(fn: (h: ItemHandle, l: Ledger) => Promise<T>): Promis
   try {
     const item = await ledger.getItem(h.item);
     // A resolver works on a decision point; everyone else on a running item.
-    const active = h.resolve ? (h.resolve === "answer" ? ["waiting_input"] : ["at_gate"]) : ["running", "verifying"];
+    const active = h.resolve === "answer" ? ["waiting_input"] : h.resolve === "gate" ? ["at_gate"] : ["running", "verifying"];
     if (!item || item.attempt !== h.attempt || !active.includes(item.status)) {
       throw new FoundryError("agent", `${h.item} attempt ${h.attempt} is no longer active (status ${item?.status ?? "unknown"})`, "end your turn");
     }
@@ -49,7 +49,7 @@ export async function cmdSubmit(args: string[]): Promise<number> {
       return 1;
     }
     if (h.resolve) {
-      const r = (h.resolve === "answer" ? AnswerResolution : GateResolution).safeParse(raw);
+      const r = (h.resolve === "answer" ? AnswerResolution : h.resolve === "gate" ? GateResolution : JudgeResult).safeParse(raw);
       if (!r.success) {
         const errors = formatIssues(r.error);
         await ledger.addSubmission(h.item, h.attempt, false, { resolve: h.resolve, raw, errors });

@@ -67,3 +67,10 @@ export const GateResolution = z.object({
 });
 export type AnswerResolution = z.infer<typeof AnswerResolution>;
 export type GateResolution = z.infer<typeof GateResolution>;
+
+// What an eval judge submits: the rubric for a replayed document output.
+export const JudgeResult = z.object({
+  criteria: z.object({ goal: z.boolean(), inputs: z.boolean(), grounded: z.boolean(), complete: z.boolean() }),
+  comment: z.string().min(1),
+});
+export type JudgeResult = z.infer<typeof JudgeResult>;

@@ -10,7 +10,9 @@ import * as git from "../kernel/git.js";
 import { Ledger, type InputRef, type Item } from "../kernel/ledger.js";
 import { compile, describePlan } from "../kernel/compile.js";
 import { importAidlc } from "../import/aidlc.js";
-import { parseConfig, type Config } from "../schemas/config.js";
+import { benchAdd, compare, loadCase, loadCases, openEvals, replayCase, sessionsPerTrial, verdict, type BenchCase, type Split } from "../kernel/eval.js";
+import { formatStats, stats, type GroupBy } from "../kernel/stats.js";
+import { parseConfig, pickAgent, type Config } from "../schemas/config.js";
 import { loadPack, validatePack, type Pack } from "../schemas/pack.js";
 import { cmdAsk, cmdNote, cmdSubmit } from "./agent.js";
 import { runFactory } from "./factory.js";
@@ -33,6 +35,12 @@ const USAGE = `usage:
   foundry autopilot on|off|status               the autopilot kill switch
   foundry why <file>:<line>                     commit, item, decisions, inputs and run behind a line
   foundry gc                                    remove failed and abandoned lanes' worktrees
+  foundry bench add <WI-n> | bench list [--set dev|held-out]   freeze an approved item as a benchmark case
+  foundry replay <case> [--trials N] [--pack <dir>] [--agent <name>] --yes   re-run a case and grade it
+  foundry eval <pack> [--set ...] [--trials N] --yes                             baseline: pass counts per case and step
+  foundry eval <pack-a> <pack-b> [--set dev|held-out|all] [--trials N] --yes   compare two pack versions
+  foundry eval <pack> --agents <a>,<b> [--set ...] [--trials N] --yes          compare agents role by role
+  foundry stats [--by role|agent|step]          first-pass yield, attempts, rejections, requests, escalations, assumptions
   foundry validate <pack>                       check a pack
   foundry import aidlc [--source <dir>] [--out <dir>]   import AI-DLC into packs/aidlc
   foundry plan <pack> [--profile <p>] [--param k=v] --dry-run [--json]   show the compiled plan
@@ -472,6 +480,164 @@ async function cmdGc(): Promise<number> {
   }
 }
 
+async function cmdBench(args: string[]): Promise<number> {
+  const { positionals, values } = parseArgs({ args, allowPositionals: true, options: { set: { type: "string" } } });
+  const [sub, itemId] = positionals;
+  const ws = await openWorkspace();
+  try {
+    if (sub === "add" && itemId) {
+      const c = await benchAdd(ws, itemId);
+      ws.out(`${itemId} frozen as case ${c.id} (${c.split}) in benchmarks/${c.id}/: envelope, base ${c.base_commit.slice(0, 12)}, accepted output, verifier setup (${c.verify.docs_only ? "documents: sensors and a judge" : `\`${c.verify.command}\``})`);
+      ws.out("benchmarks/ is protected: commit it yourself; the refinery rejects agent changes to it");
+      return 0;
+    }
+    if (sub === "list") {
+      const cases = loadCases(ws.repo, parseSet(values.set ?? "all"));
+      if (cases.length === 0) ws.out("no benchmark cases yet; add one with `foundry bench add WI-n`");
+      for (const c of cases) ws.out(`${c.id.padEnd(40)} ${c.split.padEnd(8)} ${c.source.pack.name} ${c.source.pack.version}  step ${c.source.step}, role ${c.source.role}, from ${c.source.item} (${c.verify.docs_only ? "documents" : c.verify.command})`);
+      return 0;
+    }
+    throw new FoundryError("config", "foundry bench takes add <WI-n> or list", "foundry bench add WI-3");
+  } finally {
+    await ws.ledger.close();
+  }
+}
+
+function parseSet(set: string): Split | "all" {
+  if (set === "dev" || set === "held-out" || set === "all") return set;
+  throw new FoundryError("config", `--set is dev, held-out or all, got "${set}"`, "foundry eval packs/aidlc packs/aidlc-b --set held-out");
+}
+
+function parseTrials(v: string | undefined): number {
+  const n = v === undefined ? 3 : Number(v);
+  if (!Number.isInteger(n) || n < 1) throw new FoundryError("config", `--trials must be a whole number, got "${v}"`, "--trials 3");
+  return n;
+}
+
+// The cost guard: an eval or replay says how many agent sessions it starts
+// and starts none without --yes.
+function costGuard(yes: boolean | undefined, sessions: number, what: string, cmd: string) {
+  console.log(`${what}: ${sessions} agent session${sessions === 1 ? "" : "s"}`);
+  if (!yes) throw new FoundryError("config", `this would start ${sessions} agent sessions; nothing started`, `${cmd} --yes`);
+}
+
+async function cmdReplay(args: string[]): Promise<number> {
+  const { positionals, values } = parseArgs({ args, allowPositionals: true, options: { trials: { type: "string" }, pack: { type: "string" }, agent: { type: "string" }, yes: { type: "boolean" } } });
+  if (positionals.length !== 1) throw new FoundryError("config", "foundry replay takes one case id", "foundry replay build-u1-1a2b3c4d --trials 3 --yes");
+  const trials = parseTrials(values.trials);
+  const ws = await openWorkspace();
+  try {
+    const c = loadCase(ws.repo, positionals[0]!);
+    const pack = resolvePack(values.pack ?? c.source.pack.dir ?? c.source.formula);
+    const agent = values.agent ?? pickAgent(ws.config);
+    if (!ws.config.agents[agent]) throw new FoundryError("config", `no agent "${agent}" in foundry.toml`, `pick one of: ${Object.keys(ws.config.agents).join(", ")}`);
+    costGuard(values.yes, trials * sessionsPerTrial(c), `replay ${c.id} x${trials} with ${pack.name} ${pack.version} on ${agent}`, `foundry replay ${c.id} --trials ${trials}`);
+    const ev = await openEvals(ws);
+    try {
+      const results = await replayCase(ev, c, pack, agent, trials);
+      for (const t of results) ws.out(`  trial ${t.trial}: ${t.passed ? "pass" : "fail"}  ${t.reason}  (${t.item}, from ${t.base.slice(0, 12)})`);
+      ws.out(`${c.id}: ${results.filter((t) => t.passed).length}/${trials} passes`);
+      return 0;
+    } finally {
+      await ev.ledger.close();
+    }
+  } finally {
+    await ws.ledger.close();
+  }
+}
+
+async function cmdEval(args: string[]): Promise<number> {
+  const { positionals, values } = parseArgs({ args, allowPositionals: true, options: { set: { type: "string" }, trials: { type: "string" }, agents: { type: "string" }, yes: { type: "boolean" } } });
+  const set = parseSet(values.set ?? "dev");
+  const trials = parseTrials(values.trials);
+  const agents = values.agents?.split(",").map((a) => a.trim()).filter(Boolean);
+  if (agents ? positionals.length !== 1 || agents.length !== 2 : positionals.length < 1 || positionals.length > 2) {
+    throw new FoundryError("config", "foundry eval takes one pack (a baseline), two pack versions, or one pack and --agents a,b", "foundry eval packs/aidlc packs/aidlc-b --set held-out --yes");
+  }
+  const ws = await openWorkspace();
+  try {
+    for (const a of agents ?? []) if (!ws.config.agents[a]) throw new FoundryError("config", `no agent "${a}" in foundry.toml`, `pick from: ${Object.keys(ws.config.agents).join(", ")}`);
+    const packs = positionals.map(resolvePack);
+    const cases = loadCases(ws.repo, set).filter((c) => c.source.pack.name === packs[0]!.name);
+    if (cases.length === 0) throw new FoundryError("config", `no ${set === "all" ? "" : `${set} `}benchmark cases for pack ${packs[0]!.name}`, "foundry bench add WI-n (see foundry bench list)");
+    const variants = agents
+      ? agents.map((a) => ({ label: a, pack: packs[0]!, agent: a }))
+      : packs.map((p, i) => ({ label: `${i === 0 ? "a" : "b"}:${p.version}`, pack: p, agent: pickAgent(ws.config) }));
+    const sessions = cases.reduce((n, c) => n + sessionsPerTrial(c) * trials * variants.length, 0);
+    const title = agents
+      ? `eval agents ${agents.join(" vs ")} with ${packs[0]!.name} ${packs[0]!.version}`
+      : packs.length === 1
+        ? `baseline ${packs[0]!.name} ${packs[0]!.version}`
+        : `eval ${packs[0]!.name} ${packs[0]!.version} (a) vs ${packs[1]!.version} (b)`;
+    costGuard(values.yes, sessions, `${title} on ${set} (${cases.length} cases x ${trials} trials x ${variants.length})`, `foundry eval ${positionals.join(" ")}${agents ? ` --agents ${agents.join(",")}` : ""} --set ${set} --trials ${trials}`);
+    const ev = await openEvals(ws);
+    try {
+      const scores = await compare(ev, cases, variants, trials);
+      const report = { title, set, trials, cases: scores, at: new Date().toISOString() } as Record<string, unknown>;
+      ws.out(`\n${title} on ${set}, ${trials} trials per case`);
+      if (agents) {
+        const roles = [...new Set(scores.map((s) => s.role))].sort();
+        ws.out(`${"role".padEnd(36)} cases  ${agents.map((a) => a.padEnd(10)).join(" ")}`);
+        const perRole = roles.map((r) => {
+          const mine = scores.filter((s) => s.role === r);
+          const passes = Object.fromEntries(agents.map((a) => [a, mine.reduce((n, s) => n + s.passes[a]!, 0)]));
+          ws.out(`${r.padEnd(36)} ${String(mine.length).padEnd(6)} ${agents.map((a) => `${passes[a]}/${mine.length * trials}`.padEnd(10)).join(" ")}`);
+          return { role: r, cases: mine.length, passes };
+        });
+        report.roles = perRole;
+      } else if (variants.length === 1) {
+        const label = variants[0]!.label;
+        ws.out(`${"case".padEnd(40)} ${"step".padEnd(24)} passes`);
+        for (const s of scores) ws.out(`${s.case.padEnd(40)} ${s.step.padEnd(24)} ${s.passes[label]}/${trials}`);
+        ws.out("per step:");
+        const steps = [...new Set(scores.map((s) => s.step))].sort().map((step) => {
+          const mine = scores.filter((s) => s.step === step);
+          const passes = mine.reduce((n, s) => n + s.passes[label]!, 0);
+          ws.out(`${step.padEnd(40)} ${`${mine.length} cases`.padEnd(24)} ${passes}/${mine.length * trials}`);
+          return { step, cases: mine.length, passes, trials: mine.length * trials };
+        });
+        report.steps = steps;
+      } else {
+        const [a, b] = variants.map((v) => v.label) as [string, string];
+        ws.out(`${"case".padEnd(40)} ${"step".padEnd(24)} ${"a".padEnd(6)} b`);
+        for (const s of scores) ws.out(`${s.case.padEnd(40)} ${s.step.padEnd(24)} ${`${s.passes[a]}/${trials}`.padEnd(6)} ${s.passes[b]}/${trials}`);
+        const v = verdict(scores, a, b);
+        ws.out(`${"total".padEnd(65)} ${`${v.totalA}/${scores.length * trials}`.padEnd(6)} ${v.totalB}/${scores.length * trials}`);
+        ws.out(
+          v.better
+            ? `verdict: b is better (${v.totalB} passes against ${v.totalA}, and no case lost passes)`
+            : `verdict: b is not better (${v.totalB <= v.totalA ? `${v.totalB} passes against ${v.totalA}` : `cases that lost passes: ${v.losses.join(", ")}`})`,
+        );
+        report.verdict = v;
+      }
+      const file = path.join(ev.dir, "reports", `eval-${Date.now()}.json`);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(report, null, 2) + "\n");
+      ws.out(`report: ${path.relative(ws.repo, file)}`);
+      return 0;
+    } finally {
+      await ev.ledger.close();
+    }
+  } finally {
+    await ws.ledger.close();
+  }
+}
+
+async function cmdStats(args: string[]): Promise<number> {
+  const { values } = parseArgs({ args, options: { by: { type: "string" } } });
+  const by = (values.by ?? "role") as GroupBy;
+  if (!["role", "agent", "step"].includes(by)) throw new FoundryError("config", `--by is role, agent or step, got "${by}"`, "foundry stats --by role");
+  const ws = await openWorkspace();
+  try {
+    const rows = await stats(ws.ledger, by);
+    if (rows.length === 0) ws.out("no items yet");
+    else for (const l of formatStats(rows, by)) ws.out(l);
+    return 0;
+  } finally {
+    await ws.ledger.close();
+  }
+}
+
 async function cmdValidate(args: string[]): Promise<number> {
   if (!args[0]) throw new FoundryError("config", "foundry validate takes a pack folder", "foundry validate packs/aidlc");
   const pack = loadPack(args[0]);
@@ -566,6 +732,10 @@ async function main(argv: string[]): Promise<number> {
     case "autopilot": return cmdAutopilot(rest);
     case "why": return cmdWhy(rest);
     case "gc": return cmdGc();
+    case "bench": return cmdBench(rest);
+    case "replay": return cmdReplay(rest);
+    case "eval": return cmdEval(rest);
+    case "stats": return cmdStats(rest);
     case "validate": return cmdValidate(rest);
     case "import": return cmdImport(rest);
     case "plan": return cmdPlan(rest);

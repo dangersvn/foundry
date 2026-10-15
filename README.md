@@ -147,6 +147,25 @@ the role that asked, and runs on another agent when two are configured.
 Gates whose change touches `[autopilot] locked_paths` in `foundry.toml`, and
 steps that would change a real environment, still wait for you.
 
+### Evals and stats (Phase 2)
+
+```sh
+foundry bench add WI-12                          # freeze an approved item as a case in benchmarks/
+foundry bench list --set held-out
+foundry replay <case> --trials 3 --yes           # fresh worktrees from the case's base commit, graded by Foundry
+foundry eval packs/aidlc --set held-out --yes                 # baseline per case and step
+foundry eval packs/aidlc packs/aidlc-b --set held-out --yes   # is b better? (more passes, no case loses)
+foundry eval packs/aidlc --agents kiro,claude --yes           # agents, role by role
+foundry stats --by role                          # first-pass yield, attempts, rejections, requests, escalations, assumptions
+```
+
+Code cases are graded by the frozen verify command plus the tests the
+accepted change added; document cases by the pack's checks and a judge on
+another agent. Without `--yes`, `replay` and `eval` only print how many agent
+sessions they would start. Replays have their own ledger,
+`.foundry/evals/evals.db`. The walkthrough for the Phase 2 proof is
+`docs/manual-runs-v2.md`.
+
 ## Formulas
 
 A v0 formula has one step: a goal for the agent and a verify command that

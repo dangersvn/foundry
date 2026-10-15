@@ -965,7 +965,7 @@ export class Ledger {
   }
 
   // The latest valid resolution an autopilot resolver submitted.
-  async latestResolution(itemId: string, attempt: number, kind: "answer" | "gate"): Promise<Record<string, unknown> | null> {
+  async latestResolution(itemId: string, attempt: number, kind: "answer" | "gate" | "judge"): Promise<Record<string, unknown> | null> {
     const rows = await this.db.selectFrom("submissions").select("payload_json").where("item_id", "=", itemId).where("attempt", "=", attempt).where("valid", "=", 1).orderBy("id", "desc").execute();
     return rows.map((r) => JSON.parse(r.payload_json) as Record<string, unknown>).find((r) => r.resolve === kind) ?? null;
   }

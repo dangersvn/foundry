@@ -31,3 +31,19 @@ built `dist/` command doesn't add.
 - Neither agent asked permission for reads: Kiro's read tool and Claude's
   `git ls-files` / `cat` ran without a permission request (spike note 11).
   The permission log therefore shows only writes and the `npm test` runs.
+
+## Phase 2 (to fill in after the 2d runs in docs/manual-runs-v2.md)
+
+Not recorded yet: the 2d proof needs a person and real agents.
+
+| What | Value |
+| --- | --- |
+| Held-out baseline, code-generation (cases, trials, passes) | |
+| `foundry stats --by step` for code-generation (first-pass yield, attempts/item, human rejection rate) | |
+| Hand-made change (file, what, why) | |
+| Its held-out result (a vs b per case, totals, verdict) | |
+| Autopilot bugfix run: decisions | |
+| Autopilot bugfix run: assumptions (reviewed / rejected) | |
+| Autopilot bugfix run: human stops outside locked areas (should be 0) | |
+| Autopilot bugfix run: agent sessions, tool calls, permission requests | |
+| Agents and versions | |

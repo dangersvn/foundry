@@ -21,6 +21,7 @@ export interface EnvelopeParts {
   params: Record<string, string>;
   fullVerify?: string;
   review?: boolean; // this session reviews another role's work
+  replay?: string; // an eval trial: "<case> trial t of n (pack <name> <version>)"
 }
 
 const indent = (s: string, n = 4) => s.trim().split("\n").map((l) => " ".repeat(n) + l).join("\n");
@@ -34,6 +35,7 @@ export function buildEnvelope(p: EnvelopeParts): string {
   out.push(`attempt: ${item.attempt}   # of ${item.max_attempts}`);
   out.push(`run: ${p.run.id} — ${JSON.stringify(p.run.title ?? p.run.goal)}`);
   out.push(`step: ${step.id}`);
+  if (p.replay) out.push(`replay: ${p.replay}`);
   if (item.unit) out.push(`unit: ${item.unit}`);
   out.push(`role: ${p.review ? `${step.review} (reviewing ${step.role})` : step.role}`);
   if (Object.keys(p.params).length) out.push(`params: {${Object.entries(p.params).map(([k, v]) => `${k}: ${v}`).join(", ")}}`);
@@ -244,5 +246,68 @@ export function buildResolverEnvelope(p: ResolverParts): string {
     );
   }
   out.push(`- Then run \`${f} submit --file .foundry/resolution.json\`. It is checked against the schema; fix and resubmit if it is rejected. Then end your turn.`);
+  return out.join("\n") + "\n";
+}
+
+export interface JudgeParts {
+  caseId: string;
+  step: Step;
+  request: string;
+  goal: string;
+  inputs: InputRef[];
+  roleName: string;
+  rolePrompt: string;
+  worktree: string;
+  accepted: { summary: string; artifacts: { path: string; summary: string }[]; files: string[] };
+  trial: { summary: string; artifacts: { path: string; summary: string }[]; files: string[] };
+  findings: string[];
+}
+
+// The envelope of an eval judge: score a replayed document output against
+// the rubric, with the accepted output as the reference.
+export function buildJudgeEnvelope(p: JudgeParts): string {
+  const out: string[] = [];
+  out.push(`# Foundry eval judge for case ${p.caseId}`, "");
+  out.push("```yaml");
+  out.push(`case: ${p.caseId}`);
+  out.push(`step: ${p.step.id}`);
+  out.push(`role: ${p.roleName} (judging ${p.step.role}'s output)`);
+  out.push("resolve: judge");
+  out.push("goal: |", indent(p.goal || p.step.goal || "(none)", 2));
+  out.push("request: |", indent(p.request.trim() || "(none)", 2));
+  out.push("inputs:");
+  if (p.inputs.length === 0) out.push("  []");
+  for (const i of p.inputs) out.push(`  - ${i.step} ${i.item} [${i.status}]: ${JSON.stringify(i.summary)}`);
+  out.push("accepted_output:   # what a person approved for this case; its diff is .foundry/accepted.patch");
+  out.push(`  summary: ${JSON.stringify(p.accepted.summary)}`);
+  for (const a of p.accepted.artifacts) out.push(`  artifact: ${a.path} — ${a.summary}`);
+  out.push(`  files: ${JSON.stringify(p.accepted.files)}`);
+  out.push("trial_output:   # what you judge; the files are in this worktree");
+  out.push(`  summary: ${JSON.stringify(p.trial.summary)}`);
+  for (const a of p.trial.artifacts) out.push(`  artifact: ${a.path} — ${a.summary}`);
+  out.push(`  files: ${JSON.stringify(p.trial.files)}`);
+  out.push("sensor_findings:");
+  if (p.findings.length === 0) out.push("  []");
+  for (const f of p.findings) out.push(`  - ${JSON.stringify(f)}`);
+  out.push("```", "");
+  if (p.rolePrompt.trim()) out.push("## Your role", "", p.rolePrompt.trim(), "");
+  out.push(
+    "## Rubric",
+    "",
+    "Judge the trial output, not the accepted one. Read its files in this worktree; do not change anything. For each criterion answer true or false:",
+    "",
+    "- `goal`: it does what the step's goal and the request ask.",
+    "- `inputs`: it is consistent with the inputs and builds on them.",
+    "- `grounded`: it invents no facts, requirements or files that the request, inputs or repository do not support.",
+    "- `complete`: it covers at least what the accepted output covers.",
+    "",
+    "Write .foundry/resolution.json and run `./.foundry/bin/foundry submit --file .foundry/resolution.json`, then end your turn:",
+    "",
+    "```json",
+    '{"criteria": {"goal": true, "inputs": true, "grounded": true, "complete": false}, "comment": "what is missing or wrong"}',
+    "```",
+    "",
+    "The trial passes only when every criterion is true.",
+  );
   return out.join("\n") + "\n";
 }

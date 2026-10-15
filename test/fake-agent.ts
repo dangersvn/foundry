@@ -25,6 +25,9 @@
 // [...]} for every open question, or {"verdict": "reject", "comment": ...}).
 // Without one it answers the first option, or approves, citing the request.
 // "delay_ms" makes an action wait before it acts.
+// An eval replay is scripted trial by trial, and "<key>@<pack version>"
+// scripts one pack version ("build@b", "build(u1)@b"); a judge session uses
+// "<step>:judge" (default: every rubric criterion met).
 // "{item}", "{unit}" and "{attempt}" are filled from the envelope.
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -149,11 +152,14 @@ async function work(sessionId: string, text: string, fillItem: (s: string) => st
   const unit = field("unit") ?? "";
   const review = /^role: \S+ \(reviewing/m.test(text);
   const resolve = field("resolve");
+  const replay = text.match(/^replay: \S+ trial (\d+) of \d+ \(pack \S+ (\S+)\)$/m);
+  const index = replay ? Number(replay[1]) : attempt;
   const fill = (s: string) => fillItem(s).replaceAll("{unit}", unit).replaceAll("{attempt}", String(attempt));
   const base = resolve ? `${stepId}:${resolve}` : review ? `${stepId}:review` : stepId;
-  const key = [unit ? `${base}(${unit})` : "", base].find((k) => k && plan.steps?.[k]);
+  const keys = [unit ? `${base}(${unit})` : "", base];
+  const key = [...(replay ? keys.map((k) => k && `${k}@${replay[2]}`) : []), ...keys].find((k) => k && plan.steps?.[k]);
   const script = key ? plan.steps![key] : undefined;
-  const action: Action = script ? script[Math.min(attempt, script.length) - 1]! : plan.steps ? {} : plan;
+  const action: Action = script ? script[Math.min(index, script.length) - 1]! : plan.steps ? {} : plan;
   const foundry = async (...args: string[]) => {
     const command = ["./.foundry/bin/foundry", ...args.map((a) => `'${a.replaceAll("'", "'\\''")}'`)].join(" ");
     await toolCall(sessionId, "execute", { command }, () => {
@@ -173,7 +179,9 @@ async function work(sessionId: string, text: string, fillItem: (s: string) => st
     const resolution =
       resolve === "answer"
         ? { answers: questions.map((q) => ({ question: q.id, answer: (r.answer as string) ?? q.first, rationale: (r.rationale as string) ?? "the request settles it", evidence })) }
-        : { verdict: r.verdict ?? "approve", comment: r.comment ?? "does what the request asks", findings: r.findings ?? [], evidence };
+        : resolve === "judge"
+          ? { criteria: { goal: true, inputs: true, grounded: true, complete: true, ...(r.criteria as object) }, comment: r.comment ?? "meets the rubric" }
+          : { verdict: r.verdict ?? "approve", comment: r.comment ?? "does what the request asks", findings: r.findings ?? [], evidence };
     await toolCall(sessionId, "edit", { path: ".foundry/resolution.json" }, () => writeFile(".foundry/resolution.json", JSON.stringify(resolution)));
     await foundry("submit", "--file", ".foundry/resolution.json");
     await say(sessionId, "Resolved.");
