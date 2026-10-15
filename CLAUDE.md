@@ -7,8 +7,9 @@ checks and audit; the agents supply the thinking.
 
 ## Current build
 
-Build brief: @docs/v1-brief.md
-Earlier phases (done; their scenarios must keep passing): `docs/v0-brief.md`
+Build brief: @docs/v2-brief.md
+Earlier phases (done; their scenarios must keep passing): `docs/v0-brief.md`,
+`docs/v1-brief.md`
 Acceptance contract: `features/*.feature`. Never edit these files.
 
 Reference, read when you need detail (they describe the destination, not this
