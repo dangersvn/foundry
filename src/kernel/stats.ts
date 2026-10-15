@@ -8,7 +8,7 @@ export type GroupBy = "role" | "agent" | "step";
 export interface StatRow {
   group: string;
   items: number;
-  firstPassYield: number | null; // share of items whose first attempt passed its verifiers
+  firstPassYield: number | null; // share of items whose verifiers passed before any retry
   attemptsPerItem: number | null;
   humanRejections: { rejected: number; decided: number };
   requestsPerMerged: number | null; // agent tool calls and permission requests per merged item
@@ -48,13 +48,12 @@ export async function stats(ledger: Ledger, by: GroupBy): Promise<StatRow[]> {
         a.claimed++;
         a.attempts += claims.length;
       }
-      // The first attempt: events between the first and second claim.
-      const second = claims[1] ? events.indexOf(claims[1]) : events.length;
-      const first = events.slice(0, second);
+      // First pass: the verifiers passed before any retry. An attempt that
+      // only asked a question is not a failed one.
       const skipped = events.some((e) => e.type === "skipped");
       if (claims.length && !skipped) {
         a.judged++;
-        if (first.some((e) => PASSED.has(e.type))) a.firstPass++;
+        if (events.find((e) => PASSED.has(e.type) || e.type === "retry" || e.type === "failed" || e.type === "lease_expired")?.type.match(/^(at_gate|merge_queued|lane_committed|completed)$/)) a.firstPass++;
       }
       for (const e of events) {
         if (REQUEST.test(e.type)) a.requests++;

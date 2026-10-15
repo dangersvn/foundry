@@ -695,8 +695,9 @@ Each entry gives what was decided, the options, the choice and the reason.
 ## D71. `foundry stats`
 - From the event log of the factory's ledger (replays excluded), grouped by
   role (from the run's pinned formula), agent (from `agent_started`) or step:
-  first-pass yield (items not skipped whose first attempt reached a gate,
-  the merge queue or a lane commit), attempts per item (claims), human
+  first-pass yield (items not skipped that reached a gate, the merge queue
+  or a lane commit before any retry; an attempt that only asked a question
+  does not count against it), attempts per item (claims), human
   rejection rate (gate rejections by people over their gate decisions),
   agent requests per merged item (tool calls and permission requests,
   including review and resolver sessions, over items that merged or
