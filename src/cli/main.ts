@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { workerId, workers, type Workspace } from "../kernel/dispatcher.js";
+import { collectGarbage, workerId, workers, type Workspace } from "../kernel/dispatcher.js";
 import { FoundryError } from "../kernel/errors.js";
 import * as git from "../kernel/git.js";
 import { Ledger, type InputRef, type Item } from "../kernel/ledger.js";
@@ -30,6 +30,7 @@ const USAGE = `usage:
   foundry reject <WI-n> --comment <text>        send an item at its gate back with a comment
   foundry decisions [RUN-n]                     the decision log
   foundry why <file>:<line>                     commit, item, decisions, inputs and run behind a line
+  foundry gc                                    remove failed and abandoned lanes' worktrees
   foundry validate <pack>                       check a pack
   foundry import aidlc [--source <dir>] [--out <dir>]   import AI-DLC into packs/aidlc
   foundry plan <pack> [--profile <p>] [--param k=v] --dry-run [--json]   show the compiled plan
@@ -219,7 +220,7 @@ async function cmdStatus(args: string[]): Promise<number> {
       `  status:    ${item.status.replace("_", " ")} (attempt ${item.attempt} of ${item.max_attempts})`,
       `  run:       ${item.run_id}, step ${item.step_id}${item.unit ? `, unit ${item.unit}` : ""}, role ${item.role ?? "worker"}`,
       `  agent:     ${item.agent ?? "-"}`,
-      `  worktree:  ${item.worktree ?? "-"}${item.branch ? ` (${item.branch})` : ""}`,
+      `  worktree:  ${item.worktree ?? "-"}${item.branch ? ` (${item.branch})` : ""}${item.lane_id ? `, lane ${item.lane_id}` : ""}`,
       `  verify:    ${item.verify || "-"}`,
     ];
     if (item.lease_owner) lines.push(`  lease:     ${item.lease_owner} until ${time(item.lease_expires_at!)}`);
@@ -405,6 +406,17 @@ async function cmdWhy(args: string[]): Promise<number> {
   }
 }
 
+async function cmdGc(): Promise<number> {
+  const ws = await openWorkspace();
+  try {
+    const removed = await collectGarbage(ws);
+    ws.out(removed.length ? removed.map((w) => `removed ${path.relative(ws.repo, w)}`).join("\n") : "nothing to remove: every worktree belongs to a live lane");
+    return 0;
+  } finally {
+    await ws.ledger.close();
+  }
+}
+
 async function cmdValidate(args: string[]): Promise<number> {
   if (!args[0]) throw new FoundryError("config", "foundry validate takes a pack folder", "foundry validate packs/aidlc");
   const pack = loadPack(args[0]);
@@ -496,6 +508,7 @@ async function main(argv: string[]): Promise<number> {
     case "reject": return cmdGate(rest, false);
     case "decisions": return cmdDecisions(rest);
     case "why": return cmdWhy(rest);
+    case "gc": return cmdGc();
     case "validate": return cmdValidate(rest);
     case "import": return cmdImport(rest);
     case "plan": return cmdPlan(rest);

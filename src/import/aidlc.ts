@@ -134,7 +134,8 @@ export function importAidlc(opts: { source: string; out: string; rules: string }
   }
 
   // ---- roles from the 14 agents
-  const envStages = environmentStages(opts.rules);
+  const envStages = tableStages(opts.rules, "Steps that change a real environment");
+  const codeStages = tableStages(opts.rules, "Steps that write code");
   const agentFiles = fs.readdirSync(path.join(core, "agents")).filter((f) => f.endsWith(".md")).sort();
   for (const f of agentFiles) {
     const file = path.join("core", "agents", f);
@@ -189,6 +190,7 @@ export function importAidlc(opts: { source: string; out: string; rules: string }
       max_attempts: 3,
       conditional,
       environment_change: envStages.has(s.slug),
+      docs_only: !codeStages.has(s.slug),
       outputs: [...produces, ...(s.fm.optional_produces ?? [])],
       inputs,
       verifiers: (s.fm.sensors ?? []).slice().sort(),
@@ -351,9 +353,9 @@ function listFiles(dir: string, prefix = ""): string[] {
     .flatMap((f) => (fs.statSync(path.join(dir, f)).isDirectory() ? listFiles(path.join(dir, f), path.join(prefix, f)) : [path.join(prefix, f)]));
 }
 
-// Stages listed under "Steps that change a real environment" in the rewrites doc.
-function environmentStages(rulesFile: string): Set<string> {
-  const section = fs.readFileSync(rulesFile, "utf8").split(/^## Steps that change a real environment\s*$/m)[1] ?? "";
+// The stages listed in a "## <heading>" table of the rewrites doc.
+function tableStages(rulesFile: string, heading: string): Set<string> {
+  const section = (fs.readFileSync(rulesFile, "utf8").split(new RegExp(`^## ${heading}\\s*$`, "m"))[1] ?? "").split(/^## /m)[0]!;
   return new Set([...section.matchAll(/^\| ([a-z][a-z-]+) \|/gm)].map((m) => m[1]!));
 }
 

@@ -152,8 +152,13 @@ Write your own and run it with `foundry run ./my-formula.toml`.
 - **Ledger:** `.foundry/foundry.db` (SQLite) in your repo holds runs, items,
   events and artifacts. Every status change writes an event in the same
   transaction. It's plain SQL, so you can read it with `sqlite3`.
-- **Isolation:** each attempt gets a git worktree at
-  `.foundry/worktrees/WI-n-aN` on branch `foundry/WI-n-aN`. Foundry answers
+- **Isolation:** work happens in lanes: one git worktree and branch per
+  unit of work (all of a unit's steps build on each other there), one per
+  run for document-only steps, and one per item otherwise, at
+  `.foundry/worktrees/<lane>` on branch `foundry/<lane>`. Retries reuse their
+  lane. A unit's lane merges once, at its last step; the docs lane merges at
+  the end of the run. Merged lanes are removed; failed ones stay until
+  `foundry gc`. Foundry answers
   the agent's permission requests: writes inside the worktree are allowed;
   writes outside it, `git push` and network fetches are denied. Every
   decision is in `foundry log`. `.foundry/` is added to `.git/info/exclude`,
@@ -164,7 +169,8 @@ Write your own and run it with `foundry run ./my-formula.toml`.
   `main`.
 - **Leases:** a worker holds a lease on its item (120 s, renewed while it
   works). If Foundry dies, `foundry work` waits for the lease to expire and
-  retries the item from a fresh worktree (up to 3 attempts). An item already
+  retries the item in its lane, reset to where it started (up to 3
+  attempts). An item already
   merged is never merged twice.
 - **Transcripts:** the full ACP traffic for each attempt is in
   `.foundry/transcripts/WI-n-aN.jsonl`.

@@ -55,21 +55,51 @@ export async function excludeStateDir(repo: string, extra: string[] = []): Promi
 export interface Worktree {
   path: string;
   branch: string;
-  base: string;
+  base: string; // the commit this attempt builds on
 }
 
-export async function createWorktree(repo: string, itemId: string, attempt: number): Promise<Worktree> {
+const exists = (wt: string) => fs.existsSync(path.join(wt, ".git"));
+
+// A lane's worktree, created on first use at .foundry/worktrees/<name> on
+// branch foundry/<name> (from `base`), and reused by every later attempt.
+// A branch that survived a lost worktree is checked out again, so the
+// lane's commits are kept.
+export async function openLane(repo: string, name: string, base: string): Promise<{ path: string; branch: string; created: boolean }> {
   await excludeStateDir(repo);
-  const name = `${itemId}-a${attempt}`;
   const wtPath = path.join(repo, ".foundry", "worktrees", name);
   const branch = `foundry/${name}`;
-  const base = await git(repo, ["rev-parse", await targetBranch(repo)]);
-  // A worktree for this same attempt exists only if a start was interrupted
-  // before the agent ran; start it again clean.
-  if (fs.existsSync(wtPath)) await git(repo, ["worktree", "remove", "--force", wtPath]);
+  if (exists(wtPath)) return { path: wtPath, branch, created: false };
   await git(repo, ["worktree", "prune"]);
-  await git(repo, ["worktree", "add", "-q", "-B", branch, wtPath, base]);
-  return { path: wtPath, branch, base };
+  if (fs.existsSync(wtPath)) fs.rmSync(wtPath, { recursive: true, force: true });
+  if (await ok(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])) await git(repo, ["worktree", "add", "-q", wtPath, branch]);
+  else await git(repo, ["worktree", "add", "-q", "-b", branch, wtPath, base]);
+  return { path: wtPath, branch, created: true };
+}
+
+// The start of an attempt: back to `start` (the item's place in the lane,
+// or the lane's tip for a new item), clean, and on top of `target` when the
+// lane can be rebased without conflicts. Returns the commit to build on.
+export async function startAttempt(wt: string, start: string | null, target: string): Promise<{ base: string; rebased: boolean; conflict: boolean }> {
+  await git(wt, ["reset", "-q", "--hard", start ?? "HEAD"]);
+  await git(wt, ["clean", "-q", "-fd"]);
+  let rebased = false;
+  let conflict = false;
+  if (!(await ok(wt, ["merge-base", "--is-ancestor", target, "HEAD"]))) {
+    rebased = await ok(wt, [...(await identityArgs(wt)), "rebase", "-q", target]);
+    if (!rebased) {
+      conflict = true;
+      await ok(wt, ["rebase", "--abort"]);
+    }
+  }
+  return { base: await git(wt, ["rev-parse", "HEAD"]), rebased, conflict };
+}
+
+// A merged or collected lane: its worktree and branch go away.
+export async function removeLane(repo: string, wt: string, branch: string | null): Promise<void> {
+  if (fs.existsSync(wt)) await ok(repo, ["worktree", "remove", "--force", wt]);
+  if (fs.existsSync(wt)) fs.rmSync(wt, { recursive: true, force: true });
+  await ok(repo, ["worktree", "prune"]);
+  if (branch) await ok(repo, ["branch", "-q", "-D", branch]);
 }
 
 async function identityArgs(cwd: string): Promise<string[]> {

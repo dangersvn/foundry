@@ -119,7 +119,7 @@ WI-1 is at its gate  ->  foundry status WI-1, then foundry approve WI-1 or found
 
    ```sh
    foundry status WI-n           # result, outputs, artifacts, decisions, advisory review and check findings
-   git -C .foundry/worktrees/WI-n-a1 show --stat HEAD     # the files it changed (use the attempt shown)
+   git -C <worktree> show --stat HEAD     # the files it changed (the worktree is in foundry status WI-n)
    ```
 
    Then approve or send it back with what to change:
@@ -183,8 +183,9 @@ npm test            # 2 passing tests
 ```
 
 Use the same `foundry.toml` as the bugfix run. You may set
-`[workers] count = 3`: independent steps (for example reverse-engineering
-and the ideation steps) then run at the same time in separate worktrees.
+`[workers] count = 3`: independent code steps (for example two units'
+construction steps) then run at the same time in separate lanes. Document
+steps share the run's docs lane and run one at a time.
 
 ```sh
 foundry plan ~/workspaces/foundry/packs/aidlc --profile feature --dry-run   # 30 stage steps

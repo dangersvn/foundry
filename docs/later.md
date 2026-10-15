@@ -39,3 +39,12 @@ Ideas for later phases, kept out of v0 code.
 - AI-DLC protocols (`core/aidlc-common/protocols/`) are not imported; parts
   of them (question-file format, completion message) could become envelope
   guidance if agents need it.
+
+## From Phase 2
+
+- Per-unit needs: today a `per` step waits for every unit of the step it
+  needs (step-level needs, as in Phase 1); `build (u1)` could start as soon
+  as `plan (u1)` is done.
+- Parallel document steps: the docs lane runs one item at a time (D52); a
+  lane per document step with a merge of their artifacts at the end would
+  bring the parallelism back.

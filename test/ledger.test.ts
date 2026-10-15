@@ -162,10 +162,81 @@ describe("run graph", () => {
       await ledger.claim(id, "w", 60);
       await ledger.transition(id, "w", "running", "merge_ready", "merge_queued", {});
     }
-    expect(await ledger.claimMerge("m1", 60)).toBe("WI-1");
+    expect(await ledger.claimMerge("m1", 60)).toEqual({ kind: "item", id: "WI-1" });
     expect(await ledger.claimMerge("m2", 60)).toBeNull();
     await ledger.transition("WI-1", "m1", "merging", "done", "merged", {});
-    expect(await ledger.claimMerge("m2", 60)).toBe("WI-2");
+    expect(await ledger.claimMerge("m2", 60)).toEqual({ kind: "item", id: "WI-2" });
     expect(runId).toBe("RUN-1");
+  });
+});
+
+describe("lanes", () => {
+  const formula = (steps: object[]) => ({ formula: "f", version: 1, oneStep: false, steps: steps.map((s) => ({ type: "agent", role: "worker", goal: "g", needs: [], max_attempts: 3, submit: true, inputs: [], conditional: false, environment_change: false, docs_only: false, ...s })) }) as never;
+  const finish = async (id: string, type: string, result: object = {}, commit: string | null = null) => {
+    await ledger.claim(id, "w", 60);
+    await ledger.transition(id, "w", "running", "done", type, {}, { result_json: JSON.stringify({ outputs: {}, artifacts: [], decisions: [], summary: "s", ...result }), commit_sha: commit });
+  };
+
+  it("gives a unit's steps one lane, other units their own, and docs-only steps the run's docs lane", async () => {
+    const { runId } = await ledger.startRun({
+      formula: formula([{ id: "design" }, { id: "brief", needs: ["design"], docs_only: true }, { id: "notes", needs: ["design"], docs_only: true }, { id: "plan", needs: ["design"], per: "units" }, { id: "build", needs: ["plan"], per: "units" }]),
+      title: "t",
+      input: "",
+      packDir: null,
+    });
+    await finish("WI-1", "merged", { outputs: { units: ["u1", "u2"] } });
+    const items = await ledger.listItems(runId);
+    const lane = (step: string, unit: string | null = null) => items.find((i) => i.step_id === step && i.unit === unit)!.lane_id;
+    expect(lane("design")).toBe("WI-1");
+    expect(lane("brief")).toBe("RUN-1-docs");
+    expect(lane("notes")).toBe("RUN-1-docs");
+    expect(lane("plan", "u1")).toBe("RUN-1-units-u1");
+    expect(lane("plan", "u2")).toBe("RUN-1-units-u2");
+
+    // One item at a time in a lane: the second docs item waits for the first.
+    const brief = items.find((i) => i.step_id === "brief")!.id;
+    const notes = items.find((i) => i.step_id === "notes")!.id;
+    expect(await ledger.claim(brief, "w", 60)).toBe(true);
+    expect(await ledger.claim(notes, "w2", 60)).toBe(false);
+    expect(await ledger.laneRoute(brief)).toBe("commit");
+    await ledger.transition(brief, "w", "running", "done", "lane_committed", {}, { commit_sha: "a".repeat(40), result_json: "{}" });
+    expect(await ledger.claim(notes, "w2", 60)).toBe(true);
+    await ledger.transition(notes, "w2", "running", "done", "lane_committed", {}, { result_json: "{}" });
+
+    const plan1 = items.find((i) => i.step_id === "plan" && i.unit === "u1")!.id;
+    await ledger.claim(plan1, "w", 60);
+    expect(await ledger.laneRoute(plan1)).toBe("commit");
+    await ledger.transition(plan1, "w", "running", "done", "lane_committed", {}, { commit_sha: "b".repeat(40), result_json: "{}" });
+    await finish(items.find((i) => i.step_id === "plan" && i.unit === "u2")!.id, "lane_committed");
+    const build1 = (await ledger.listItems(runId)).find((i) => i.step_id === "build" && i.unit === "u1")!;
+    expect(build1.lane_id).toBe("RUN-1-units-u1");
+    await ledger.claim(build1.id, "w", 60);
+    expect(await ledger.laneRoute(build1.id)).toBe("merge");
+  });
+
+  it("merges the docs lane after the rest of the run, then closes the run", async () => {
+    const { runId } = await ledger.startRun({ formula: formula([{ id: "brief", docs_only: true }, { id: "code", needs: ["brief"] }]), title: "t", input: "", packDir: null });
+    await finish("WI-1", "lane_committed", {}, "c".repeat(40));
+    expect((await ledger.getLane("RUN-1-docs"))?.head).toBe("c".repeat(40));
+    await finish("WI-2", "merged");
+    expect((await ledger.getLane("RUN-1-docs"))?.status).toBe("merge_ready");
+    expect((await ledger.getRun(runId))?.status).toBe("open");
+    expect(await ledger.claimMerge("m", 60)).toEqual({ kind: "lane", id: "RUN-1-docs" });
+    expect(await ledger.hasActiveItems(runId)).toBe(true);
+    await ledger.laneMerged("RUN-1-docs", "m", "d".repeat(40));
+    expect((await ledger.getRun(runId))?.status).toBe("done");
+  });
+
+  it("sends a failed lane merge back to the lane's last item, which builds on the lane's tip", async () => {
+    const { runId } = await ledger.startRun({ formula: formula([{ id: "brief", docs_only: true }]), title: "t", input: "", packDir: null });
+    await ledger.claim("WI-1", "w", 60);
+    await ledger.enterLane("WI-1", "w", {}, { worktree: "/w", branch: "b", lane_start: "0".repeat(40) });
+    await ledger.transition("WI-1", "w", "running", "done", "lane_committed", {}, { commit_sha: "c".repeat(40), result_json: "{}" });
+    expect(await ledger.claimMerge("m", 60)).toEqual({ kind: "lane", id: "RUN-1-docs" });
+    expect(await ledger.laneSendBack("RUN-1-docs", "m", "conflict", {}, "the docs conflict with main")).toEqual({ itemId: "WI-1", next: "ready" });
+    const item = (await ledger.getItem("WI-1"))!;
+    expect(item).toMatchObject({ status: "ready", attempt: 2, lane_start: null, lane_id: "RUN-1-docs" });
+    expect((await ledger.getRun(runId))?.status).toBe("open");
+    expect((await ledger.notes("WI-1")).at(-1)).toMatchObject({ kind: "refinery", body: "the docs conflict with main" });
   });
 });

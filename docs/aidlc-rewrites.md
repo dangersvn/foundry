@@ -82,3 +82,18 @@ These stages stop at a gate with their plan, for the person to carry out:
 | --- | --- |
 | environment-provisioning | creates cloud resources |
 | deployment-execution | deploys to an environment |
+
+## Steps that write code
+
+Every other stage only writes documents under the record folder, so it runs
+in the run's docs lane (`docs_only`) and its documents merge together at the
+end of the run. These stages change the repository's code or build files and
+run in their own lane (per unit where they fan out):
+
+| Stage | Why |
+| --- | --- |
+| code-generation | writes the code and its unit tests |
+| build-and-test | builds, runs and fixes tests |
+| ci-pipeline | writes CI configuration (buildspec.yml, workflow YAML) |
+| deployment-pipeline | writes CD configuration |
+| observability-setup | writes dashboard, alarm and tracing configuration |

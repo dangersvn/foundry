@@ -10,12 +10,12 @@ import type { FoundryWorld } from "../support/world.js";
 
 // The three-step test pack and the fake agent's script, built up by the
 // Given steps and written to disk when the run starts.
-interface PackSpec {
+export interface PackSpec {
   steps: Record<string, unknown>[];
   plan: Record<string, Record<string, unknown>[]>;
   workers: number;
 }
-type W = FoundryWorld & { pack?: PackSpec; packDir?: string; runId?: string };
+export type W = FoundryWorld & { pack?: PackSpec; packDir?: string; runId?: string };
 
 const designSubmit = (units: string[], extra: Record<string, unknown> = {}) => ({
   status: "done",
@@ -29,7 +29,7 @@ const designSubmit = (units: string[], extra: Record<string, unknown> = {}) => (
 // One ledger connection at a time: several connections in one process can
 // deadlock each other in SQLite (see test/ledger.test.ts).
 let chain: Promise<unknown> = Promise.resolve();
-function ledger<T>(w: W, fn: (l: Ledger) => Promise<T>): Promise<T> {
+export function ledger<T>(w: W, fn: (l: Ledger) => Promise<T>): Promise<T> {
   const run = chain.then(async () => {
     const l = await Ledger.open(path.join(w.repo, ".foundry/foundry.db"));
     try {
@@ -41,10 +41,10 @@ function ledger<T>(w: W, fn: (l: Ledger) => Promise<T>): Promise<T> {
   chain = run.catch(() => {});
   return run;
 }
-const itemsOf = (w: W, step?: string) => ledger(w, async (l) => (await l.listItems()).filter((i) => !step || i.step_id === step));
-const firstItem = async (w: W, step: string) => (await itemsOf(w, step))[0]!;
-const eventsOf = (w: W, id: string) => ledger(w, (l) => l.events(id));
-const envelope = (w: W, id: string, attempt: number) => fs.readFileSync(path.join(w.repo, ".foundry/envelopes", `${id}-a${attempt}.md`), "utf8");
+export const itemsOf = (w: W, step?: string) => ledger(w, async (l) => (await l.listItems()).filter((i) => !step || i.step_id === step));
+export const firstItem = async (w: W, step: string) => (await itemsOf(w, step))[0]!;
+export const eventsOf = (w: W, id: string) => ledger(w, (l) => l.events(id));
+export const envelope = (w: W, id: string, attempt: number) => fs.readFileSync(path.join(w.repo, ".foundry/envelopes", `${id}-a${attempt}.md`), "utf8");
 const ts = (events: LedgerEvent[], type: string) => events.find((e) => e.type === type)?.ts;
 
 Given("the test pack {string} with steps {string}, {string} and {string}", function (this: W, _name: string, a: string, b: string, c: string) {
@@ -132,7 +132,7 @@ Given("two {string} items change the same lines of the same file", function (thi
 
 // ---- running
 
-async function startRun(w: W) {
+export async function startRun(w: W, ...extra: string[]) {
   const dir = path.join(w.dir, "three-step");
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(path.join(dir, "roles"), { recursive: true });
@@ -147,7 +147,7 @@ async function startRun(w: W) {
   w.writeConfig({ fake: fakeAgentCommand("--plan", plan, "--delay-ms", "200") }, `\n[leases]\nttl_seconds = 5\n[workers]\ncount = ${w.pack!.workers}\n`);
   w.packDir = dir;
   w.mainBefore = w.git("rev-parse", "main");
-  w.result = await w.foundry("run", dir);
+  w.result = await w.foundry("run", dir, ...extra);
   w.runId = w.result.stdout.match(/(RUN-\d+) created/)?.[1];
   assert.ok(w.runId, w.result.stdout + w.result.stderr);
 }

@@ -447,3 +447,94 @@ Each entry gives what was decided, the options, the choice and the reason.
 - `foundry status RUN-n` prints questions, gates (approved, rejected), agent
   sessions (including reviews), tool calls, permission requests, retries and
   minutes from run start to done, which is what the brief asks to record.
+
+## D50. Phase 2 layout and order
+- Phase 2 follows `docs/plan-v2.md`: 2a lanes, 2b autopilot, 2c evals and
+  stats, each committed on its own; 2d is a runbook
+  (`docs/manual-runs-v2.md`). New kernel files: `src/kernel/autopilot.ts`,
+  `src/kernel/eval.ts`, `src/kernel/stats.ts`.
+
+## D51. Lanes (2a)
+- What: the brief replaces one worktree per item with lanes.
+- Choice: ledger schema v3 adds a `lanes` table and `items.lane_id` /
+  `lane_start`. The lane is fixed when an item is created: a `docs_only`
+  step goes to `RUN-n-docs`, a `per` step to `RUN-n-<per>-<unit>`, anything
+  else to a lane named after the item. The worktree is
+  `.foundry/worktrees/<lane>` on branch `foundry/<lane>`. A lane that merged
+  or failed is never reused; a later item with the same key gets
+  `<key>.2`.
+- Each item commits on top of the lane (its own squashed commit with its
+  `Foundry-Item` trailer), so `foundry why` still finds the item behind a
+  line after a lane merges several commits at once.
+- Unfinished items in an older ledger get a lane of their own on their next
+  attempt.
+
+## D52. One item at a time per lane
+- Options: let items share a worktree concurrently; serialize per lane.
+- Choice: serialize. Two agents in one worktree would mix their changes in
+  one commit. A lane belongs to the item that started in it until that item
+  finishes, including while it waits for an answer or at its gate; claiming
+  skips items whose lane is held, and an item already holding its lane is
+  claimed first.
+- Cost: document-only steps of one run no longer run in parallel. Units
+  still do (one lane each).
+
+## D53. Every attempt starts from the item's place in the lane
+- What: "attempts reuse its lane" leaves open what the files look like.
+- Choice: the worktree is reused, reset to the commit the item started from
+  (`lane_start`), cleaned, and rebased onto main when main has moved and the
+  lane's commits apply cleanly. The history in the envelope tells the next
+  attempt what happened; a half-finished attempt's files are not kept.
+  Rebasing at the start is what lets an item sent back with a merge conflict
+  succeed on its next attempt.
+- **Assumption:** discarding the previous attempt's files is better than
+  building on them. It matches Phase 1 (fresh files each attempt).
+
+## D54. When lanes merge
+- An item in its own lane merges as in Phase 1. A unit lane merges with the
+  unit's last step (the refinery rebases the whole lane, runs the full
+  verify and fast-forwards); earlier steps finish as `done` with a
+  `lane_committed` event and their commit on the lane. The docs lane's items
+  all finish that way, and the lane merges once every step of the run has
+  finished; the run closes only after that merge.
+- A lane whose items finished without going through the merge queue (for
+  example a unit whose last step was skipped) goes to the merge queue on its
+  own, like the docs lane. The merge queue now holds items and lanes and
+  still merges one at a time.
+- A failed lane merge goes back to the lane's last committed item, which is
+  reopened for another attempt (the run reopens with it).
+- An empty lane (nothing committed) is closed as merged without a merge.
+
+## D55. New lanes start from the docs lane
+- What: document steps' files stay on the docs lane until the end of the
+  run, but code steps need to read them (AI-DLC's code-generation reads
+  requirements-analysis's documents).
+- Choice: a new non-docs lane branches from the run's docs lane while it has
+  unmerged commits, else from main. A code lane then carries the documents
+  it was based on when it merges; the docs lane later merges only what is
+  left (git drops the commits main already has).
+- **Assumption:** documents reaching main a little before the end of the
+  run, with the code that used them, is acceptable under "their artifacts
+  merge together at the end of the run".
+
+## D56. A per step can fan out over an upstream per step's units
+- What: in the lanes scenario `build` needs only `plan`, which runs per
+  unit but does not output the unit list.
+- Choice: when no input outputs the `per` list, a `per` step runs once per
+  unit of the needed steps that ran per the same list. AI-DLC is unaffected
+  (its per-unit steps also need units-generation).
+
+## D57. Cleanup and `foundry gc`
+- A merged lane's worktree and branch are removed right after the merge
+  (and swept by any worker if a crash came in between). Failed lanes, lanes
+  abandoned by a failed run and worktrees no lane owns (Phase 0 and 1
+  per-attempt worktrees) stay until `foundry gc`, which removes them and
+  their branches. Live lanes are never touched.
+
+## D58. Which AI-DLC steps are document-only
+- `docs/aidlc-rewrites.md` lists the stages that write code
+  (code-generation, build-and-test, ci-pipeline, deployment-pipeline,
+  observability-setup); the import marks every other step `docs_only`.
+- **Assumption:** the other 25 stages only write documents under the record
+  folder. One that writes code anyway still works; its change merges at the
+  end of the run with the full verify.

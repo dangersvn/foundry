@@ -13,7 +13,8 @@
 // escape        try to write outside cwd and to run `git push`, then write inside
 //
 // For multi-step runs the plan scripts each step, attempt by attempt (the last
-// entry repeats); a reviewer session uses the key "<step>:review":
+// entry repeats); a reviewer session uses the key "<step>:review", and
+// "<key>(<unit>)" scripts one unit only:
 //   {"steps": {"design": [{"ask": {"question": "...", "options": ["A", "B"]}},
 //                         {"writes": [...], "submit": {...}}]}}
 // An action may write files, ask, note, hand off and submit (an object, or
@@ -141,7 +142,9 @@ async function work(sessionId: string, text: string, fillItem: (s: string) => st
   const unit = field("unit") ?? "";
   const review = /^role: \S+ \(reviewing/m.test(text);
   const fill = (s: string) => fillItem(s).replaceAll("{unit}", unit).replaceAll("{attempt}", String(attempt));
-  const script = plan.steps?.[review ? `${stepId}:review` : stepId];
+  const base = review ? `${stepId}:review` : stepId;
+  const key = [unit ? `${base}(${unit})` : "", base].find((k) => k && plan.steps?.[k]);
+  const script = key ? plan.steps![key] : undefined;
   const action: Action = script ? script[Math.min(attempt, script.length) - 1]! : plan.steps ? {} : plan;
   const foundry = async (...args: string[]) => {
     const command = ["./.foundry/bin/foundry", ...args.map((a) => `'${a.replaceAll("'", "'\\''")}'`)].join(" ");

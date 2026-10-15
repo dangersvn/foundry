@@ -88,17 +88,26 @@ export async function processItem(ws: Workspace, itemId: string): Promise<Outcom
   };
 
   try {
+    const lane = await ledger.ensureLane(itemId);
     const wt = await serialized(async () => {
       await git.excludeStateDir(ws.repo, RENDERED_PATHS);
-      return git.createWorktree(ws.repo, itemId, item.attempt);
+      const target = await git.targetBranch(ws.repo);
+      // A new lane starts from main, or from the run's docs lane while that
+      // holds documents not merged yet, so later steps can read them.
+      const docs = lane.kind === "docs" ? undefined : (await ledger.lanes(run.id)).find((l) => l.kind === "docs" && l.status === "open" && l.head);
+      const opened = await git.openLane(ws.repo, lane.id, docs?.head ?? (await git.headSha(ws.repo, target)));
+      const fresh = (await ledger.getItem(itemId))!;
+      const s = await git.startAttempt(opened.path, fresh.lane_start, target);
+      return { ...opened, ...s };
     });
     const agent = pickAgent(ws.config);
-    await ledger.record(itemId, owner, "worktree_created", { path: wt.path, branch: wt.branch, base: wt.base }, {
-      worktree: wt.path,
-      branch: wt.branch,
-      agent: step.type === "agent" ? agent : "script",
-    });
-    out(`${itemId} worktree ${path.relative(ws.repo, wt.path)} on ${wt.branch}`);
+    await ledger.enterLane(
+      itemId,
+      owner,
+      { path: wt.path, branch: wt.branch, base: wt.base, reused: !wt.created, rebased: wt.rebased, conflict: wt.conflict },
+      { worktree: wt.path, branch: wt.branch, lane_start: wt.base, agent: step.type === "agent" ? agent : "script" },
+    );
+    out(`${itemId} worktree ${path.relative(ws.repo, wt.path)} on ${wt.branch}${wt.created ? "" : " (lane reused)"}`);
 
     let result: Result | null = null;
     if (step.type === "script") {
@@ -212,6 +221,11 @@ export async function processItem(ws: Workspace, itemId: string): Promise<Outcom
       await ledger.transition(itemId, owner, "verifying", "at_gate", "at_gate", { commit, environmentChange: step.environment_change }, fields);
       out(`${itemId} at gate: approve with \`foundry approve ${itemId}\` or reject with \`foundry reject ${itemId} --comment "..."\``);
       return { status: "at_gate", itemId };
+    }
+    if ((await ledger.laneRoute(itemId)) === "commit") {
+      await ledger.transition(itemId, owner, "verifying", "done", "lane_committed", { commit, lane: lane.id }, fields);
+      out(`${itemId} done: ${commit ? `committed ${commit.slice(0, 7)} on its lane` : "no file changes"}; the lane merges later`);
+      return { status: "done", itemId, commit: commit ?? undefined };
     }
     if (!commit) {
       await ledger.transition(itemId, owner, "verifying", "done", "completed", { commit: null }, fields);
@@ -335,8 +349,49 @@ async function runSession(ws: Workspace, item: Item, run: Run, step: Step, wt: g
   });
 }
 
-// The refinery: rebase onto the target, run the full verify, fast-forward.
-// A conflict or failure goes back to its item with the error attached.
+// What the refinery does to land a lane: rebase it onto the target, run the
+// full verify (documents only: skipped), fast-forward the target.
+class LandError extends FoundryError {
+  constructor(error: FoundryError, readonly output?: string) {
+    super(error.layer, error.message, error.next);
+  }
+}
+
+async function land(
+  ws: Workspace,
+  wt: string,
+  fullVerify: string | undefined,
+  record: (type: string, payload: Record<string, unknown>) => Promise<void>,
+  alreadyVerified: (head: string) => boolean,
+  ref: string,
+): Promise<{ head: string; target: string }> {
+  const target = await git.targetBranch(ws.repo);
+  const head = await git.rebaseOnto(wt, target);
+  const changed = await git.changedFiles(wt, target, head);
+  const docsOnly = changed.length > 0 && changed.every((f) => ws.config.project.docs_paths.some((p) => f.startsWith(p)));
+  if (fullVerify && docsOnly) {
+    await record("merge_verify_skipped", { reason: "the change only touches documentation paths", files: changed.length });
+  } else if (fullVerify && !alreadyVerified(head)) {
+    ws.out(`${ref} merge verify: ${fullVerify}`);
+    const r = await runVerify(wt, fullVerify);
+    if (!r.passed) throw new LandError(new FoundryError("verifier", `\`${fullVerify}\` failed on top of ${target} (exit ${r.exitCode})`, `foundry status ${ref}`), tail(r.output));
+    await record("merge_verified", { command: fullVerify, sha: head });
+  }
+  await git.fastForward(ws.repo, target, head);
+  return { head, target };
+}
+
+// A merged lane's worktree and branch are removed; failed lanes stay.
+async function removeLaneFiles(ws: Workspace, laneId: string) {
+  const lane = await ws.ledger.getLane(laneId);
+  if (!lane?.worktree) return;
+  await serialized(() => git.removeLane(ws.repo, lane.worktree!, lane.branch));
+  await ws.ledger.runNote(lane.run_id, "lane_removed", { lane: lane.id, worktree: lane.worktree });
+}
+
+// The refinery for an item: its lane merges with it (the item's own lane,
+// or a unit's lane at its last step). A conflict or failure goes back to
+// the item with the error attached.
 export async function mergeItem(ws: Workspace, itemId: string): Promise<Outcome> {
   const { ledger, owner, out } = ws;
   const ttl = ws.config.leases.ttl_seconds;
@@ -358,44 +413,109 @@ export async function mergeItem(ws: Workspace, itemId: string): Promise<Outcome>
     if (merged) {
       await ledger.transition(itemId, owner, "merging", "done", "merged", { commit: merged, target, recovered: true }, { commit_sha: merged });
       out(`${itemId} done: already merged as ${merged.slice(0, 7)}`);
+      if (item.lane_id) await removeLaneFiles(ws, item.lane_id);
       return { status: "done", itemId, commit: merged };
     }
     if (!item.commit_sha || !item.worktree) {
       await ledger.transition(itemId, owner, "merging", "done", "completed", { commit: null });
       return { status: "done", itemId };
     }
-    let head: string;
-    try {
-      head = await git.rebaseOnto(item.worktree, target);
-    } catch (e) {
-      if (e instanceof FoundryError) return await sendBack(e);
-      throw e;
-    }
     const verified = (await ledger.events(itemId)).filter((e) => e.type === "verified").at(-1);
-    const alreadyVerified = verified?.payload.sha === head && verified?.payload.command === fullVerify;
-    const changed = await git.changedFiles(item.worktree, target, head);
-    const docsOnly = changed.length > 0 && changed.every((f) => ws.config.project.docs_paths.some((p) => f.startsWith(p)));
-    if (fullVerify && docsOnly) {
-      await ledger.record(itemId, owner, "merge_verify_skipped", { reason: "the change only touches documentation paths", files: changed.length });
-    } else if (fullVerify && !alreadyVerified) {
-      out(`${itemId} merge verify: ${fullVerify}`);
-      const r = await runVerify(item.worktree, fullVerify);
-      if (!r.passed) {
-        return await sendBack(new FoundryError("verifier", `\`${fullVerify}\` failed on top of ${target} (exit ${r.exitCode})`, `foundry status ${itemId}`), { output: tail(r.output) });
-      }
-      await ledger.record(itemId, owner, "merge_verified", { command: fullVerify, sha: head });
-    }
-    await git.fastForward(ws.repo, target, head);
-    await ledger.transition(itemId, owner, "merging", "done", "merged", { commit: head, target, branch: item.branch }, { commit_sha: head });
+    const { head } = await land(
+      ws,
+      item.worktree,
+      fullVerify,
+      (type, payload) => ledger.record(itemId, owner, type, payload),
+      (h) => verified?.payload.sha === h && verified?.payload.command === fullVerify,
+      itemId,
+    );
+    await ledger.transition(itemId, owner, "merging", "done", "merged", { commit: head, target, branch: item.branch, lane: item.lane_id }, { commit_sha: head });
     out(`${itemId} done: merged ${head.slice(0, 7)} into ${target}`);
+    if (item.lane_id) await removeLaneFiles(ws, item.lane_id).catch(() => {});
     return { status: "done", itemId, commit: head };
   } catch (e) {
     const error = e instanceof FoundryError ? e : new FoundryError("git", `merge failed: ${(e as Error).message}`, `foundry status ${itemId}`);
     if (error.layer === "ledger") return { status: "failed", itemId, error };
-    return await sendBack(error).catch(() => ({ status: "failed" as const, itemId, error }));
+    return await sendBack(error, e instanceof LandError && e.output ? { output: e.output } : {}).catch(() => ({ status: "failed" as const, itemId, error }));
   } finally {
     clearInterval(renew);
   }
+}
+
+// The refinery for a lane that merges on its own: the run's docs lane at
+// the end of the run, or a unit lane whose last step had nothing to merge.
+// A failure goes back to the lane's last committed item.
+export async function mergeLane(ws: Workspace, laneId: string): Promise<Outcome> {
+  const { ledger, owner, out } = ws;
+  const ttl = ws.config.leases.ttl_seconds;
+  const renew = setInterval(() => void ledger.renewLaneLease(laneId, owner, ttl).catch(() => {}), Math.max(250, (ttl * 1000) / 3));
+  const lane = (await ledger.getLane(laneId))!;
+  const run = (await ledger.getRun(lane.run_id))!;
+  const last = (await ledger.listItems(run.id)).filter((i) => i.lane_id === laneId && i.status === "done").sort((a, b) => b.updated_at - a.updated_at)[0];
+  const ref = last?.id ?? laneId;
+  const fullVerify = (JSON.parse(run.formula_json!) as { verify?: string }).verify;
+  try {
+    const target = await git.targetBranch(ws.repo);
+    const merged = last ? await git.findItemCommit(ws.repo, target, last.id) : null;
+    if (merged) {
+      await ledger.laneMerged(laneId, owner, merged, { target, recovered: true });
+    } else {
+      if (!lane.worktree || !lane.head) throw new FoundryError("git", `lane ${laneId} has no worktree or commits to merge`, "foundry gc");
+      await serialized(() => git.startAttempt(lane.worktree!, lane.head, target).then(() => undefined));
+      const { head } = await land(ws, lane.worktree, fullVerify, (type, payload) => ledger.runNote(run.id, type, { lane: laneId, ...payload }), () => false, ref);
+      await ledger.laneMerged(laneId, owner, head, { target, branch: lane.branch });
+      out(`lane ${laneId} merged ${head.slice(0, 7)} into ${target}`);
+    }
+    await removeLaneFiles(ws, laneId).catch(() => {});
+    return { status: "done", itemId: ref };
+  } catch (e) {
+    const error = e instanceof FoundryError ? e : new FoundryError("git", `merge of lane ${laneId} failed: ${(e as Error).message}`, `foundry status ${run.id}`);
+    if (error.layer === "ledger") return { status: "failed", itemId: ref, error };
+    const output = e instanceof LandError ? e.output : undefined;
+    const r = await ledger.laneSendBack(laneId, owner, error.message, { ...errorPayload(error), ...(output ? { output } : {}) }, `${error.message}${output ? `\n${tail(output, 2000)}` : ""}`);
+    out(`lane ${laneId} sent back by the merge queue${r.itemId ? ` to ${r.itemId}` : ""}: ${error.message.split("\n")[0]}`);
+    return { status: r.next === "failed" ? "failed" : "retry", itemId: r.itemId ?? ref, error };
+  } finally {
+    clearInterval(renew);
+  }
+}
+
+// Lanes the ledger says are merged but whose worktree is still on disk (a
+// crash between the merge and the clean-up).
+async function sweepMerged(ws: Workspace) {
+  for (const l of await ws.ledger.lanes()) {
+    if (l.status === "merged" && l.worktree && fs.existsSync(l.worktree)) await removeLaneFiles(ws, l.id).catch(() => {});
+  }
+}
+
+// `foundry gc`: failed and abandoned lanes, lanes left open by finished
+// runs, and worktrees no lane owns (older per-attempt worktrees) are removed.
+export async function collectGarbage(ws: Workspace): Promise<string[]> {
+  const removed: string[] = [];
+  const keep = new Set<string>();
+  for (const l of await ws.ledger.lanes()) {
+    const run = await ws.ledger.getRun(l.run_id);
+    const live = (l.status === "open" && run?.status === "open") || l.status === "merge_ready" || l.status === "merging";
+    if (live) {
+      if (l.worktree) keep.add(path.resolve(l.worktree));
+      continue;
+    }
+    if (l.worktree && fs.existsSync(l.worktree)) {
+      await serialized(() => git.removeLane(ws.repo, l.worktree!, l.branch));
+      await ws.ledger.runNote(l.run_id, "lane_removed", { lane: l.id, worktree: l.worktree, status: l.status, by: "gc" });
+      removed.push(l.worktree);
+    }
+  }
+  const dir = path.join(ws.stateDir, "worktrees");
+  for (const name of fs.existsSync(dir) ? fs.readdirSync(dir).sort() : []) {
+    const wt = path.join(dir, name);
+    if (keep.has(path.resolve(wt))) continue;
+    const leased = (await ws.ledger.listItems()).some((i) => i.worktree && path.resolve(i.worktree) === path.resolve(wt) && !["done", "skipped", "failed"].includes(i.status));
+    if (leased) continue;
+    await serialized(() => git.removeLane(ws.repo, wt, `foundry/${name}`));
+    removed.push(wt);
+  }
+  return removed;
 }
 
 function describeEvent(itemId: string, e: AgentEvent): string {
@@ -423,11 +543,12 @@ export async function workQueue(
   for (;;) {
     for (const id of await ws.ledger.recoverExpired()) ws.out(`${id} lease expired; recovered`);
     for (const id of await ws.ledger.flagStalls(ws.config.workers.stall_seconds * 1000)) ws.out(`${id} has been quiet for a while (stalled?)`);
-    const mergeId = await ws.ledger.claimMerge(ws.owner, ttl, opts.runId);
-    if (mergeId) {
-      worked.push(await mergeItem(ws, mergeId));
+    const merge = await ws.ledger.claimMerge(ws.owner, ttl, opts.runId);
+    if (merge) {
+      worked.push(merge.kind === "item" ? await mergeItem(ws, merge.id) : await mergeLane(ws, merge.id));
       continue;
     }
+    await sweepMerged(ws);
     const itemId = await ws.ledger.claimNext(ws.owner, ttl, opts.runId);
     if (itemId) {
       const item = (await ws.ledger.getItem(itemId))!;

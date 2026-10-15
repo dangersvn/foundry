@@ -39,6 +39,9 @@ export const Step = z.object({
   phase: z.string().optional(),
   // What the gate is for, e.g. "plan approval".
   gate_note: z.string().optional(),
+  // The step only writes documents: it works in the run's docs lane, whose
+  // commits merge together at the end of the run.
+  docs_only: z.boolean().default(false),
 });
 export type Step = z.infer<typeof Step>;
 
